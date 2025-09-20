@@ -2,9 +2,13 @@
 
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY frontend/package*.json ./
+
+# copy package.json & lock file
+COPY package*.json ./
 RUN npm ci
-COPY frontend/ ./
+
+# copy everything else
+COPY . .
 RUN npm run build
 
 FROM node:20-alpine AS runtime
@@ -17,5 +21,3 @@ RUN npm pkg set scripts.start="vite preview --host 0.0.0.0 --port ${PORT} --stri
  && npm ci --omit=dev
 EXPOSE 8080
 CMD ["npm", "run", "start"]
-
-
