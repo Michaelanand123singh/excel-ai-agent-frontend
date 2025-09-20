@@ -1,13 +1,12 @@
-import { useState, useMemo } from 'react'  // ✅ removed React
+import  { useState, useMemo } from 'react'
 import { Card, CardContent, CardHeader } from './ui/Card'
 import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from './ui/Table'
 import { StatsCard } from './ui/StatsCard'
 import { EmptyState, EmptyStateIcons } from './ui/EmptyState'
-import { TableSkeleton, CardSkeleton } from './ui/Skeleton'  // ✅ removed Skeleton
+import {  TableSkeleton, CardSkeleton } from './ui/Skeleton'
 import { Pagination } from './ui/Pagination'
-
 
 interface Company {
   company_name: string
@@ -108,9 +107,10 @@ export function SearchResults({
     return 'text-red-600'
   }
 
-  const totalPages = Math.ceil(results?.total_matches / pageSize) || 1
-  const startIndex = (currentPage - 1) * pageSize
-  const endIndex = Math.min(startIndex + pageSize, results?.total_matches || 0)
+const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
+const startIndex = (currentPage - 1) * pageSize
+const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
+
 
   if (loading) {
     return (
@@ -180,15 +180,18 @@ export function SearchResults({
     <div className="space-y-6">
       {/* Summary Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <StatsCard
-  title="Total Matches"
-  value={results?.total_matches !== undefined 
-    ? results.total_matches.toLocaleString() 
-    : '0'}
-  subtitle={`Found for "${results?.part_number || 'N/A'}"`}
-  ...
-/>
-
+        <StatsCard
+          title="Total Matches"
+          value={results?.total_matches ? results.total_matches.toLocaleString() : '0'}
+          subtitle={`Found for "${results?.part_number || 'N/A'}"`}
+          icon={
+            <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              </svg>
+            </div>
+          }
+        />
         
         <StatsCard
           title="Price Range"
