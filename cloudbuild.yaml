@@ -1,5 +1,3 @@
-# Cloud Build: Frontend (Vite React)
-
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
@@ -7,7 +5,7 @@ options:
 substitutions:
   _SERVICE: excelai-frontend
   _REGION: us-central1
-  _PROJECT_ID: 	opt2deal-472408
+  _PROJECT_ID: opt2deal-472408
   _API_BASE: https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app
   _CPU: "1"
   _MEM: 256Mi
@@ -18,11 +16,11 @@ images:
 steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: Build image
-    args: [ 'build', '-t', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA', '.' ]
+    args: ['build', '-t', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA', '.']
 
   - name: 'gcr.io/cloud-builders/docker'
     id: Push image
-    args: [ 'push', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA' ]
+    args: ['push', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA']
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: Deploy to Cloud Run
