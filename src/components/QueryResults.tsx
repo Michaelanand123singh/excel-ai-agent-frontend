@@ -44,11 +44,7 @@ export function QueryResults({
     return 'error'
   }
 
-  const getPerformanceColor = (latency: number) => {
-    if (latency < 500) return 'text-green-600'
-    if (latency < 1000) return 'text-yellow-600'
-    return 'text-red-600'
-  }
+
 
   const getRouteIcon = (route: string) => {
     switch (route?.toLowerCase()) {
