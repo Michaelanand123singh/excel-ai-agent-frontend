@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import { Card, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
 import { useDatasets } from '../store/datasets'
@@ -14,16 +14,101 @@ import {
   ClockIcon
 } from '@heroicons/react/24/outline'
 
+// WebSocket URL helper
+const wsUrl = (path: string) => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  return `${protocol}//${host}${path}`
+}
+
 export default function FilesPage() {
   const { files, isLoading, error, loadFiles, removeFile } = useDatasets()
   const [deleting, setDeleting] = useState<number | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [fileProgress, setFileProgress] = useState<Record<number, {
+    status: string
+    processedRows: number
+    totalRows: number
+    percentage: number
+  }>>({})
+  const websocketsRef = useRef<Map<number, WebSocket>>(new Map())
   const navigate = useNavigate()
   const { showToast } = useToast()
 
   useEffect(() => {
     loadFiles()
   }, [loadFiles])
+
+  // Debug: log files data
+  useEffect(() => {
+    if (files.length > 0) {
+      console.log('Files loaded:', files)
+      console.log('First file ID:', files[0]?.id)
+    }
+  }, [files])
+
+  // Connect to websockets for files that are processing
+  useEffect(() => {
+    const currentWebsockets = websocketsRef.current
+    const processingFiles = files.filter(file => 
+      file.status === 'uploaded' || file.status === 'stored'
+    )
+
+    // Close websockets for files that are no longer processing
+    currentWebsockets.forEach((socket, fileId) => {
+      if (!processingFiles.find(f => f.id === fileId)) {
+        socket.close()
+        currentWebsockets.delete(fileId)
+      }
+    })
+
+    // Connect to websockets for processing files
+    processingFiles.forEach(file => {
+      if (!currentWebsockets.has(file.id)) {
+        const socket = new WebSocket(wsUrl(`/api/v1/ws/${file.id}`))
+        
+        socket.onmessage = (evt) => {
+          try {
+            const data = JSON.parse(evt.data)
+            if (data.type && data.file_id === file.id) {
+              setFileProgress(prev => ({
+                ...prev,
+                [file.id]: {
+                  status: data.type,
+                  processedRows: data.processed_rows || 0,
+                  totalRows: data.total_rows || 0,
+                  percentage: data.percentage || 0
+                }
+              }))
+
+              // If processing is complete, close the websocket
+              if (data.type === 'processing_complete') {
+                socket.close()
+                currentWebsockets.delete(file.id)
+                // Refresh files to get updated status
+                setTimeout(() => loadFiles(), 1000)
+              }
+            }
+          } catch {
+            // Ignore JSON parse errors
+          }
+        }
+
+        socket.onerror = () => {
+          socket.close()
+          currentWebsockets.delete(file.id)
+        }
+
+        currentWebsockets.set(file.id, socket)
+      }
+    })
+
+    // Cleanup on unmount
+    return () => {
+      currentWebsockets.forEach(socket => socket.close())
+      currentWebsockets.clear()
+    }
+  }, [files, loadFiles])
 
   const handleDelete = async (fileId: number, filename: string) => {
     if (!confirm(`Are you sure you want to delete "${filename}"? This action cannot be undone.`)) {
@@ -138,7 +223,7 @@ export default function FilesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {files.map((file) => (
             <Card key={file.id} className="hover:shadow-lg transition-shadow">
-              <CardHeader>
+              <div className="px-5 py-4 border-b">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <DocumentIcon className="w-8 h-8 text-blue-600" />
@@ -146,20 +231,33 @@ export default function FilesPage() {
                       <h3 className="font-medium text-gray-900 truncate" title={file.filename}>
                         {file.filename}
                       </h3>
-                      <p className="text-sm text-gray-500">ID: {file.id}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs font-mono bg-blue-100 px-2 py-1 rounded text-blue-800 border">
+                          ID: {file.id || 'N/A'}
+                        </span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(file.id.toString())
+                            showToast(`File ID ${file.id} copied to clipboard`, 'success')
+                          }}
+                          className="text-xs text-blue-600 hover:text-blue-800 underline"
+                          title="Copy file ID"
+                        >
+                          Copy
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <Button
                     variant="secondary"
-                    size="sm"
                     onClick={() => handleDelete(file.id, file.filename)}
                     disabled={deleting === file.id}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-2 py-1"
                   >
                     {deleting === file.id ? <Spinner size={14} /> : <TrashIcon className="w-4 h-4" />}
                   </Button>
                 </div>
-              </CardHeader>
+              </div>
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
@@ -183,19 +281,17 @@ export default function FilesPage() {
                   <div className="flex gap-2">
                     <Button
                       variant="secondary"
-                      size="sm"
                       onClick={() => navigate(`/query?fileId=${file.id}`)}
                       disabled={file.status !== 'processed'}
-                      className="flex-1"
+                      className="flex-1 text-sm px-3 py-2"
                     >
                       <ChartBarIcon className="w-4 h-4 mr-1" />
                       Query
                     </Button>
                     <Button
                       variant="secondary"
-                      size="sm"
                       onClick={() => navigate(`/upload?fileId=${file.id}`)}
-                      className="flex-1"
+                      className="flex-1 text-sm px-3 py-2"
                     >
                       <DocumentIcon className="w-4 h-4 mr-1" />
                       Details
@@ -203,10 +299,44 @@ export default function FilesPage() {
                   </div>
                   
                   {file.status !== 'processed' && (
-                    <div className="text-xs text-yellow-600 bg-yellow-50 p-2 rounded">
-                      {file.status === 'uploaded' && 'File is being processed...'}
-                      {file.status === 'stored' && 'File is being analyzed...'}
-                      {file.status === 'error' && 'Processing failed. Please try uploading again.'}
+                    <div className="space-y-2">
+                      <div className="text-xs text-yellow-600 bg-yellow-50 p-2 rounded">
+                        {file.status === 'uploaded' && 'File is being processed...'}
+                        {file.status === 'stored' && 'File is being analyzed...'}
+                        {file.status === 'error' && 'Processing failed. Please try uploading again.'}
+                      </div>
+                      
+                      {/* Progress bar for processing files */}
+                      {fileProgress[file.id] && (file.status === 'uploaded' || file.status === 'stored') && (
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-medium text-gray-700">
+                              {fileProgress[file.id].status === 'processing_started' && 'Processing started'}
+                              {fileProgress[file.id].status === 'download_complete' && 'Download complete, parsing...'}
+                              {fileProgress[file.id].status === 'batch_progress' && `Processing batch...`}
+                              {fileProgress[file.id].status === 'processing_complete' && 'Processing complete'}
+                            </span>
+                            <span className="text-gray-500">
+                              {fileProgress[file.id].processedRows > 0 && 
+                                `${fileProgress[file.id].processedRows.toLocaleString()} rows`}
+                            </span>
+                          </div>
+                          
+                          <div className="w-full bg-gray-200 rounded-full h-1.5">
+                            <div 
+                              className="bg-blue-600 h-1.5 rounded-full transition-all duration-300 ease-out"
+                              style={{ width: `${fileProgress[file.id].percentage}%` }}
+                            ></div>
+                          </div>
+                          
+                          <div className="flex justify-between text-xs text-gray-500">
+                            <span>{fileProgress[file.id].percentage}% complete</span>
+                            {fileProgress[file.id].totalRows > 0 && (
+                              <span>Total: {fileProgress[file.id].totalRows.toLocaleString()}</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

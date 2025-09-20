@@ -159,12 +159,16 @@ export async function queryDataset(fileId: number, question: string) {
   return res.data as Record<string, unknown>
 }
 
-export async function searchPartNumber(fileId: number, partNumber: string) {
-  const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber })
+export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 50, showAll = false) {
+  const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll })
   return res.data as {
     part_number: string
     total_matches: number
     companies: Record<string, unknown>[]
+    page: number
+    page_size: number
+    total_pages: number
+    show_all?: boolean
     message: string
   }
 }

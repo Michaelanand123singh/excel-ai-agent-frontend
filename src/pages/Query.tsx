@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
+import { SearchResults } from '../components/SearchResults'
+import { QueryResults } from '../components/QueryResults'
 import { queryDataset, searchPartNumber, testSearchEndpoint } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
@@ -14,6 +16,44 @@ export default function QueryPage() {
   const [res, setRes] = useState<Record<string, unknown>>()
   const [partNumber, setPartNumber] = useState('')
   const [partResults, setPartResults] = useState<Record<string, unknown>>()
+  const [partPage, setPartPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [showAll, setShowAll] = useState(false)
+
+  function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
+    if (!Array.isArray(rows) || rows.length === 0) return
+    const headers = [
+      'company_name',
+      'contact_details',
+      'email',
+      'quantity',
+      'unit_price',
+      'uqc',
+      'part_number',
+      'item_description',
+      'secondary_buyer'
+    ]
+    const escape = (val: unknown) => {
+      if (val === null || val === undefined) return ''
+      const s = String(val)
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
+      return s
+    }
+    const lines = [headers.join(',')]
+    for (const row of rows) {
+      const line = headers.map(h => escape(row[h])).join(',')
+      lines.push(line)
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
   const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
@@ -60,8 +100,9 @@ export default function QueryPage() {
     setLoading(true)
     setError(undefined)
     try {
-      const r = await searchPartNumber(fileId, partNumber.trim())
+      const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll)
       setPartResults(r)
+      setPartPage(1)
       showToast(`Found ${(r as { total_matches: number }).total_matches} companies with part number "${partNumber}"`, 'success')
     } catch (err: unknown) {
       const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Search failed'
@@ -70,7 +111,7 @@ export default function QueryPage() {
     } finally {
       setLoading(false)
     }
-  }, [fileId, partNumber, showToast])
+  }, [fileId, partNumber, pageSize, showAll, showToast])
 
   // No refs needed in manual mode
 
@@ -154,25 +195,31 @@ export default function QueryPage() {
                   </div>
                 </CardContent>
               </Card>
-              <Card>
-                <CardHeader title="Answer" />
-                <CardContent>
-                      <div className="text-sm text-gray-600">Answer</div>
-                      <div className="mt-2 text-sm">{(res as { answer?: string })?.answer || '-'}</div>
-                      {res && (
-                        <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
-                          <span>Route: {(res as { route?: string }).route}</span>
-                          <span>Confidence: {Math.round(((res as { confidence?: number }).confidence || 0) * 100)}%</span>
-                          <span className={`font-medium ${((res as { latency_ms?: number }).latency_ms || 0) < 1000 ? 'text-green-600' : 'text-yellow-600'}`}>
-                            ⚡ {(res as { latency_ms?: number }).latency_ms || 0}ms
-                          </span>
-                          {(res as { cached?: boolean }).cached && (
-                            <span className="text-blue-600 font-medium">📦 Cached</span>
-                          )}
-                        </div>
-                      )}
-                </CardContent>
-              </Card>
+              <QueryResults 
+                results={res as {
+                  answer?: string
+                  route?: string
+                  confidence?: number
+                  latency_ms?: number
+                  cached?: boolean
+                  sql?: { query?: string }
+                  semantic?: Array<{ id?: string; text?: string; score?: number }>
+                } | undefined}
+                loading={loading}
+                onCopyAnswer={() => {
+                  if (res?.answer) {
+                    navigator.clipboard.writeText(res.answer as string)
+                    showToast('Answer copied to clipboard!', 'success')
+                  }
+                }}
+                onCopySQL={() => {
+                  const sqlQuery = (res as any)?.sql?.query
+                  if (sqlQuery) {
+                    navigator.clipboard.writeText(sqlQuery)
+                    showToast('SQL query copied to clipboard!', 'success')
+                  }
+                }}
+              />
             </>
           ) : (
             <>
@@ -204,44 +251,68 @@ export default function QueryPage() {
                   </div>
                 </CardContent>
               </Card>
-              <Card>
-                <CardHeader title="Search Results" />
-                <CardContent>
-                  {partResults ? (
-                        <div>
-                          <div className="text-sm font-medium text-green-600 mb-2">
-                            {(partResults as { message?: string }).message}
-                          </div>
-                          <div className="flex items-center gap-4 text-sm text-gray-600 mb-3">
-                            <span>Found {(partResults as { total_matches?: number }).total_matches} companies with part number "{(partResults as { part_number?: string }).part_number}"</span>
-                            <span className={`font-medium ${((partResults as { latency_ms?: number }).latency_ms || 0) < 1000 ? 'text-green-600' : 'text-yellow-600'}`}>
-                              ⚡ {(partResults as { latency_ms?: number }).latency_ms || 0}ms
-                            </span>
-                            {(partResults as { cached?: boolean }).cached && (
-                              <span className="text-blue-600 font-medium">📦 Cached</span>
-                            )}
-                          </div>
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {(partResults.companies as Record<string, unknown>[]).map((company: Record<string, unknown>, i: number) => (
-                          <div key={i} className="border rounded p-3 bg-gray-50">
-                            <div className="text-sm font-medium">Company #{i + 1}</div>
-                            <div className="text-xs text-gray-600 mt-1">
-                              {Object.entries(company).map(([key, value]) => (
-                                <div key={key} className="flex">
-                                  <span className="font-medium w-24">{key}:</span>
-                                  <span>{String(value)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-gray-500">Enter a part number to search</div>
-                  )}
-                </CardContent>
-              </Card>
+              <SearchResults
+                results={partResults as {
+                  companies: Array<{
+                    company_name: string
+                    contact_details: string
+                    email: string
+                    quantity: number | string
+                    unit_price: number | string
+                    uqc: string
+                    item_description: string
+                    part_number?: string
+                  }>
+                  total_matches: number
+                  part_number: string
+                  message: string
+                  latency_ms: number
+                  cached: boolean
+                  price_summary?: {
+                    min_price: number
+                    max_price: number
+                    total_quantity: number
+                    avg_price: number
+                  }
+                } | undefined}
+                loading={loading}
+                onExportCSV={() => exportCompaniesToCSV(
+                  ((partResults as Record<string, unknown>)?.companies as Record<string, unknown>[]) || [], 
+                  `part_search_${(partResults as Record<string, unknown>)?.part_number || 'export'}.csv`
+                )}
+                onPageChange={async (page: number) => {
+                  setPartPage(page)
+                  try {
+                    const r = await searchPartNumber(fileId, partNumber.trim(), page, pageSize, showAll)
+                    setPartResults(r)
+                  } catch (error) {
+                    console.error('Page change error:', error)
+                  }
+                }}
+                onPageSizeChange={async (size: number) => {
+                  setPageSize(size)
+                  setPartPage(1)
+                  try {
+                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, size, showAll)
+                    setPartResults(r)
+                  } catch (error) {
+                    console.error('Page size change error:', error)
+                  }
+                }}
+                onShowAllChange={async (showAll: boolean) => {
+                  setShowAll(showAll)
+                  setPartPage(1)
+                  try {
+                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll)
+                    setPartResults(r)
+                  } catch (error) {
+                    console.error('Show all change error:', error)
+                  }
+                }}
+                currentPage={partPage}
+                pageSize={pageSize}
+                showAll={showAll}
+              />
             </>
           )}
         </div>
@@ -255,30 +326,6 @@ export default function QueryPage() {
               </pre>
             </CardContent>
           </Card>
-        )}
-        
-        {activeTab === 'query' && (
-          <div className="space-y-4">
-            <Card>
-              <CardHeader title="SQL Preview" />
-              <CardContent>
-                    <pre className="mt-2 text-xs bg-gray-50 p-2 rounded overflow-auto">{(res as { sql?: { query?: string } })?.sql?.query || '--'}</pre>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader title="Semantic Matches" />
-              <CardContent>
-                    <div className="mt-2 text-xs space-y-2">
-                      {((res?.semantic as Record<string, unknown>[]) || []).map((s: Record<string, unknown>, i: number) => (
-                        <div key={i} className="border rounded p-2">
-                          <div className="font-medium">{(s as { id?: string }).id}</div>
-                          <div className="text-gray-600">{(s as { text?: string }).text}</div>
-                        </div>
-                      ))}
-                    </div>
-              </CardContent>
-            </Card>
-          </div>
         )}
       </div>
     </div>
