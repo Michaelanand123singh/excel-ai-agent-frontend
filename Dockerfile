@@ -3,12 +3,12 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# copy package.json & lock file
-COPY package*.json ./
+# Copy package.json & lock file from frontend
+COPY frontend/package*.json ./
 RUN npm ci
 
-# copy everything else
-COPY . .
+# Copy rest of frontend
+COPY frontend/ ./
 RUN npm run build
 
 FROM node:20-alpine AS runtime
