@@ -101,11 +101,7 @@ export function SearchResults({
     return String(qty || 'N/A')
   }
 
-  const getPerformanceColor = (latency: number) => {
-    if (latency < 500) return 'text-green-600'
-    if (latency < 1000) return 'text-yellow-600'
-    return 'text-red-600'
-  }
+
 
 const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
 const startIndex = (currentPage - 1) * pageSize

@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader } from './ui/Card'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
 import { EmptyState, EmptyStateIcons } from './ui/EmptyState'
+import { CardSkeleton } from './ui/Skeleton'
 // import { Skeleton, CardSkeleton } from './ui/Skeleton'
 
 interface QueryResultsProps {
