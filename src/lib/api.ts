@@ -1,7 +1,24 @@
 import axios from 'axios'
+const getApiBaseUrl = () => {
+  // Prefer environment variable
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL 
-console.log("API Base:", API_BASE);
+  // Development mode fallback
+  if (import.meta.env.MODE === 'development') {
+    return 'http://localhost:5173';
+  }
+
+  // If env var is missing in production, throw an error instead of silently falling back
+  throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
+console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL);
+console.log('Final API_BASE_URL:', API_BASE_URL);
+console.log('Full API URL:', `${API_BASE_URL}/api`);
 
 export const api = axios.create({
   baseURL: API_BASE,
