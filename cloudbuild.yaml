@@ -16,7 +16,13 @@ images:
 steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: Build image
-    args: ['build', '-t', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA', '.']
+    args:
+      [
+        'build',
+        '-t', 'gcr.io/${_PROJECT_ID}/${_SERVICE}:$SHORT_SHA',
+        '--build-arg', 'VITE_API_BASE=${_API_BASE}',
+        '.'
+      ]
 
   - name: 'gcr.io/cloud-builders/docker'
     id: Push image
@@ -36,4 +42,3 @@ steps:
       - --port=8080
       - --cpu=${_CPU}
       - --memory=${_MEM}
-      - --set-env-vars=VITE_API_BASE=${_API_BASE}
