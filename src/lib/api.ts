@@ -14,11 +14,11 @@ const getApiBaseUrl = () => {
   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
 };
 
-const API_BASE_URL = getApiBaseUrl();
+const API_BASE = getApiBaseUrl();
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL);
-console.log('Final API_BASE_URL:', API_BASE_URL);
-console.log('Full API URL:', `${API_BASE_URL}/api`);
+console.log('Final API_BASE_URL:', API_BASE);
+console.log('Full API URL:', `${API_BASE}/api`);
 
 export const api = axios.create({
   baseURL: API_BASE,
