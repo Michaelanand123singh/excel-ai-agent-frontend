@@ -14,7 +14,7 @@ const getApiBaseUrl = () => {
   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
 };
 
-const API_BASE = getApiBaseUrl();
+const API_BASE = "https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app";
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL);
 console.log('Final API_BASE_URL:', API_BASE);
