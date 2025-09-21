@@ -7,8 +7,8 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Accept API base URL at build time
-ARG VITE_API_BASE
-ENV VITE_API_BASE=$VITE_API_BASE
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 # Install dependencies
 COPY package*.json ./
