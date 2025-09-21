@@ -1,18 +1,18 @@
 import axios from 'axios'
-const getApiBaseUrl = () => {
-  // Prefer environment variable
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
+// const getApiBaseUrl = () => {
+//   // Prefer environment variable
+//   if (import.meta.env.VITE_API_BASE_URL) {
+//     return import.meta.env.VITE_API_BASE_URL;
+//   }
 
-  // Development mode fallback
-  if (import.meta.env.MODE === 'development') {
-    return 'http://localhost:5173';
-  }
+//   // Development mode fallback
+//   if (import.meta.env.MODE === 'development') {
+//     return 'http://localhost:5173';
+//   }
 
-  // If env var is missing in production, throw an error instead of silently falling back
-  throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
-};
+//   // If env var is missing in production, throw an error instead of silently falling back
+//   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
+// };
 
 const API_BASE = "https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app";
 
