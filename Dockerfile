@@ -1,23 +1,27 @@
 # syntax=docker/dockerfile:1
 
+# Build stage
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# copy package.json & lock file
 COPY package*.json ./
 RUN npm ci
 
-# copy source code
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runtime
-ENV NODE_ENV=production \
-    PORT=8080
-WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
-RUN npm pkg set scripts.start="vite preview --host 0.0.0.0 --port ${PORT} --strictPort" \
- && npm ci --omit=dev
+# Runtime stage: use Nginx to serve static files
+FROM nginx:alpine AS runtime
+WORKDIR /usr/share/nginx/html
+
+# Copy build output to Nginx web root
+COPY --from=builder /app/dist ./
+
+# Expose Cloud Run port
 EXPOSE 8080
-CMD ["npm", "run", "start"]
+
+# Override default Nginx config to use 8080 (instead of 80)
+RUN sed -i 's/listen       80;/listen 8080;/' /etc/nginx/conf.d/default.conf
+
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]

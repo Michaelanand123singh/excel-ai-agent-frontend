@@ -1,11 +1,11 @@
-import React, { useState, useMemo } from 'react'
+import  { useState, useMemo } from 'react'
 import { Card, CardContent, CardHeader } from './ui/Card'
 import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from './ui/Table'
 import { StatsCard } from './ui/StatsCard'
 import { EmptyState, EmptyStateIcons } from './ui/EmptyState'
-import { Skeleton, TableSkeleton, CardSkeleton } from './ui/Skeleton'
+import {  TableSkeleton, CardSkeleton } from './ui/Skeleton'
 import { Pagination } from './ui/Pagination'
 
 interface Company {
@@ -101,15 +101,12 @@ export function SearchResults({
     return String(qty || 'N/A')
   }
 
-  const getPerformanceColor = (latency: number) => {
-    if (latency < 500) return 'text-green-600'
-    if (latency < 1000) return 'text-yellow-600'
-    return 'text-red-600'
-  }
 
-  const totalPages = Math.ceil(results?.total_matches / pageSize) || 1
-  const startIndex = (currentPage - 1) * pageSize
-  const endIndex = Math.min(startIndex + pageSize, results?.total_matches || 0)
+
+const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
+const startIndex = (currentPage - 1) * pageSize
+const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
+
 
   if (loading) {
     return (

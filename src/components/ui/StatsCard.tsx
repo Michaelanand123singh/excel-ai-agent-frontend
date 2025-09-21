@@ -1,7 +1,7 @@
 import React from 'react'
 import { Card, CardContent } from './Card'
 
-interface StatsCardProps {
+interface StatsCardProps extends React.HTMLAttributes<HTMLDivElement> {
   title: string
   value: string | number
   subtitle?: string
@@ -10,7 +10,6 @@ interface StatsCardProps {
     value: number
     isPositive: boolean
   }
-  className?: string
 }
 
 export function StatsCard({ 
@@ -19,10 +18,11 @@ export function StatsCard({
   subtitle, 
   icon, 
   trend, 
-  className = '' 
+  className = '', 
+  ...rest               // ✅ capture extra props like onClick, id, style
 }: StatsCardProps) {
   return (
-    <Card className={`${className}`}>
+    <Card className={className} {...rest}>
       <CardContent className="p-6">
         <div className="flex items-center justify-between">
           <div className="flex-1">
@@ -33,9 +33,11 @@ export function StatsCard({
             )}
             {trend && (
               <div className="flex items-center mt-2">
-                <span className={`text-sm font-medium ${
-                  trend.isPositive ? 'text-green-600' : 'text-red-600'
-                }`}>
+                <span
+                  className={`text-sm font-medium ${
+                    trend.isPositive ? 'text-green-600' : 'text-red-600'
+                  }`}
+                >
                   {trend.isPositive ? '↗' : '↘'} {Math.abs(trend.value)}%
                 </span>
                 <span className="text-sm text-gray-500 ml-1">vs previous</span>

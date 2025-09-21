@@ -1,9 +1,9 @@
-import React from 'react'
 import { Card, CardContent, CardHeader } from './ui/Card'
 import { Badge } from './ui/Badge'
 import { Button } from './ui/Button'
 import { EmptyState, EmptyStateIcons } from './ui/EmptyState'
-import { Skeleton, CardSkeleton } from './ui/Skeleton'
+import { CardSkeleton } from './ui/Skeleton'
+// import { Skeleton, CardSkeleton } from './ui/Skeleton'
 
 interface QueryResultsProps {
   results: {
@@ -44,11 +44,7 @@ export function QueryResults({
     return 'error'
   }
 
-  const getPerformanceColor = (latency: number) => {
-    if (latency < 500) return 'text-green-600'
-    if (latency < 1000) return 'text-yellow-600'
-    return 'text-red-600'
-  }
+
 
   const getRouteIcon = (route: string) => {
     switch (route?.toLowerCase()) {
