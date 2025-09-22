@@ -191,6 +191,38 @@ export async function searchPartNumber(fileId: number, partNumber: string, page 
   }
 }
 
+export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false) {
+  const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll })
+  return res.data as {
+    results: Record<string, {
+      part_number?: string
+      total_matches?: number
+      companies?: Array<Record<string, unknown>>
+      page?: number
+      page_size?: number
+      total_pages?: number
+      price_summary?: Record<string, number>
+      error?: string
+    }>
+    total_parts: number
+    latency_ms: number
+    file_id: number
+  }
+}
+
+export async function searchPartNumberBulkUpload(fileId: number, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('file_id', String(fileId))
+  const res = await api.post('/api/v1/query/search-part-bulk-upload', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  return res.data as {
+    results: Record<string, unknown>
+    total_parts: number
+    latency_ms: number
+    file_id: number
+  }
+}
+
 export async function getAnalyticsSummary() {
   const res = await api.get('/api/v1/analytics/summary')
   return res.data as { total_queries: number; avg_latency_ms: number }
