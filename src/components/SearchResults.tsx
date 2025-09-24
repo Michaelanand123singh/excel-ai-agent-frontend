@@ -7,7 +7,6 @@ import { StatsCard } from './ui/StatsCard'
 import { EmptyState, EmptyStateIcons } from './ui/EmptyState'
 import {  TableSkeleton, CardSkeleton } from './ui/Skeleton'
 import { Pagination } from './ui/Pagination'
-import { formatINR } from '../lib/currency'
 
 interface Company {
   company_name: string
@@ -18,9 +17,6 @@ interface Company {
   uqc: string
   item_description: string
   part_number?: string
-  secondary_buyer?: string
-  secondary_buyer_contact?: string
-  secondary_buyer_email?: string
 }
 
 interface SearchResultsProps {
@@ -93,7 +89,10 @@ export function SearchResults({
   }
 
   const formatPrice = (price: number | string) => {
-    return formatINR(price)
+    if (typeof price === 'number') {
+      return `$${price.toFixed(2)}`
+    }
+    return String(price || 'N/A')
   }
 
   const formatQuantity = (qty: number | string) => {
@@ -103,9 +102,12 @@ export function SearchResults({
     return String(qty || 'N/A')
   }
 
-  const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
-  const startIndex = (currentPage - 1) * pageSize
-  const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
+
+
+const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
+const startIndex = (currentPage - 1) * pageSize
+const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
+
 
   if (loading) {
     return (
@@ -187,17 +189,18 @@ export function SearchResults({
             </div>
           }
         />
+        
         <StatsCard
           title="Price Range"
           value={results.price_summary && 
                  typeof results.price_summary.min_price === 'number' && 
                  typeof results.price_summary.max_price === 'number' ? 
-            `${formatINR(results.price_summary.min_price)} - ${formatINR(results.price_summary.max_price)}` : 
+            `$${results.price_summary.min_price.toFixed(2)} - $${results.price_summary.max_price.toFixed(2)}` : 
             'N/A'
           }
           subtitle={results.price_summary && 
                    typeof results.price_summary.avg_price === 'number' ? 
-            `Avg: ${formatINR(results.price_summary.avg_price)}` : 
+            `Avg: $${results.price_summary.avg_price.toFixed(2)}` : 
             'No price data'
           }
           icon={
@@ -208,6 +211,7 @@ export function SearchResults({
             </div>
           }
         />
+        
         <StatsCard
           title="Total Quantity"
           value={results.price_summary && 
@@ -224,6 +228,7 @@ export function SearchResults({
             </div>
           }
         />
+        
         <StatsCard
           title="Response Time"
           value={`${results?.latency_ms || 0}ms`}
@@ -343,7 +348,7 @@ export function SearchResults({
                     onClick={() => handleSort('unit_price')}
                   >
                     <div className="flex items-center justify-end gap-1">
-                      Unit Price (INR)
+                      Unit Price
                       {sortField === 'unit_price' && (
                         <span>{sortDirection === 'asc' ? '↑' : '↓'}</span>
                       )}
@@ -369,21 +374,6 @@ export function SearchResults({
                       {sortField === 'item_description' && (
                         <span>{sortDirection === 'asc' ? '↑' : '↓'}</span>
                       )}
-                    </div>
-                  </TableHead>
-                  <TableHead>
-                    <div className="flex items-center gap-1">
-                      Secondary Buyer
-                    </div>
-                  </TableHead>
-                  <TableHead>
-                    <div className="flex items-center gap-1">
-                      Secondary Contact
-                    </div>
-                  </TableHead>
-                  <TableHead>
-                    <div className="flex items-center gap-1">
-                      Secondary Email
                     </div>
                   </TableHead>
                 </TableRow>
@@ -422,21 +412,6 @@ export function SearchResults({
                       <TableCell>
                         <div className="max-w-xs truncate text-gray-600" title={company.item_description}>
                           {company.item_description || 'N/A'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="max-w-xs truncate" title={company.secondary_buyer}>
-                          {company.secondary_buyer || 'N/A'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="max-w-xs truncate" title={company.secondary_buyer_contact}>
-                          {company.secondary_buyer_contact || 'N/A'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="max-w-xs truncate" title={company.secondary_buyer_email}>
-                          {company.secondary_buyer_email || 'N/A'}
                         </div>
                       </TableCell>
                     </TableRow>
