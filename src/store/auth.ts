@@ -3,18 +3,18 @@ import { login as apiLogin, setAuthToken } from '../lib/api'
 
 type AuthState = {
   token?: string
-  username?: string
+  email?: string
   isLoading: boolean
   isInitializing: boolean
   error?: string
-  login: (username: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<void>
   logout: () => void
   initialize: () => void
 }
 
 export const useAuth = create<AuthState>((set) => ({
   token: undefined,
-  username: undefined,
+  email: undefined,
   isLoading: false,
   isInitializing: true,
   error: undefined,
@@ -23,18 +23,18 @@ export const useAuth = create<AuthState>((set) => ({
     set({ isInitializing: true })
     const savedToken = localStorage.getItem('token')
     if (savedToken) {
-      set({ token: savedToken, username: 'user', isInitializing: false })
+      set({ token: savedToken, email: 'user@example.com', isInitializing: false })
       setAuthToken(savedToken)
     } else {
       set({ isInitializing: false })
     }
   },
   
-  async login(username, password) {
+  async login(email, password) {
     set({ isLoading: true, error: undefined })
     try {
-      const res = await apiLogin(username, password)
-      set({ token: res.access_token, username, isLoading: false })
+      const res = await apiLogin(email, password)
+      set({ token: res.access_token, email, isLoading: false })
       localStorage.setItem('token', res.access_token)
       setAuthToken(res.access_token)
     } catch (error: any) {
@@ -47,7 +47,7 @@ export const useAuth = create<AuthState>((set) => ({
   },
   
   logout() {
-    set({ token: undefined, username: undefined, error: undefined, isInitializing: false })
+    set({ token: undefined, email: undefined, error: undefined, isInitializing: false })
     localStorage.removeItem('token')
     setAuthToken(undefined)
   },

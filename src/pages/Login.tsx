@@ -8,7 +8,7 @@ import { useAuth } from '../store/auth'
 import { useToast } from '../hooks/useToast'
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const { login, token, initialize } = useAuth()
@@ -30,8 +30,8 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!username.trim()) {
-      showToast('Please enter a username', 'error')
+    if (!email.trim()) {
+      showToast('Please enter an email address', 'error')
       return
     }
     
@@ -42,7 +42,7 @@ export default function LoginPage() {
 
     setIsLoading(true)
     try {
-      await login(username.trim(), password.trim())
+      await login(email.trim(), password.trim())
       showToast('Login successful! Redirecting...', 'success')
       navigate('/dashboard')
     } catch (error: any) {
@@ -54,15 +54,15 @@ export default function LoginPage() {
   }
 
   const handleDemoLogin = async () => {
-    setUsername('demo')
-    setPassword('demo123')
+    setEmail('info@opt2deal.com')
+    setPassword('Opt2deal123')
     setIsLoading(true)
     try {
-      await login('demo', 'demo123')
-      showToast('Demo login successful! Redirecting...', 'success')
+      await login('info@opt2deal.com', 'Opt2deal123')
+      showToast('Login successful! Redirecting...', 'success')
       navigate('/dashboard')
     } catch (error: any) {
-      const errorMsg = error.response?.data?.detail || 'Demo login failed'
+      const errorMsg = error.response?.data?.detail || 'Login failed'
       showToast(errorMsg, 'error')
     } finally {
       setIsLoading(false)
@@ -85,15 +85,15 @@ export default function LoginPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-                  Username
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                  Email Address
                 </label>
                 <Input
-                  id="username"
-                  type="text"
-                  placeholder="Enter your username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  id="email"
+                  type="email"
+                  placeholder="Enter your email address"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   disabled={isLoading}
                   className="w-full"
                 />
@@ -139,17 +139,17 @@ export default function LoginPage() {
                 disabled={isLoading}
                 className="w-full mt-4"
               >
-                {isLoading ? <Spinner size={16} /> : 'Demo Login'}
+                {isLoading ? <Spinner size={16} /> : 'Quick Login'}
               </Button>
             </div>
 
             <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <h3 className="text-sm font-medium text-blue-800 mb-2">Demo Credentials:</h3>
+              <h3 className="text-sm font-medium text-blue-800 mb-2">System Credentials:</h3>
               <div className="text-xs text-blue-700 space-y-1">
-                <div><strong>Username:</strong> demo</div>
-                <div><strong>Password:</strong> demo123</div>
+                <div><strong>Email:</strong> info@opt2deal.com</div>
+                <div><strong>Password:</strong> Opt2deal123</div>
                 <div className="text-blue-600 mt-2">
-                  Or use any username/password combination - the backend accepts all credentials for now.
+                  Use the credentials above or click "Quick Login" to auto-fill them.
                 </div>
               </div>
             </div>
