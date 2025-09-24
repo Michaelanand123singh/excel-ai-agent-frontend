@@ -363,7 +363,7 @@ export default function BulkSearchPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {results.results.slice(0, 100).map((result, index) => (
+                  {(Array.isArray(results.results) ? results.results : []).slice(0, 100).map((result, index) => (
                     <TableRow key={index}>
                       <TableCell>
                         <div className="space-y-1">
