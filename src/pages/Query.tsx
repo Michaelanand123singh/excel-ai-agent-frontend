@@ -202,29 +202,34 @@ export default function QueryPage() {
     }
   }
 
-  function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
-    if (!Array.isArray(rows) || rows.length === 0) return
-    const headers = ['company_name','contact_details','email','quantity','unit_price','uqc','part_number','item_description','secondary_buyer','secondary_buyer_contact','secondary_buyer_email']
-    const escape = (val: unknown) => {
-      if (val == null) return ''
-      const s = String(val)
-      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
-      return s
-    }
-    const lines = [headers.join(',')]
-    for (const row of rows) {
-      lines.push(headers.map(h => escape(row[h])).join(','))
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+  function exportCompaniesToCSV(rows: Company[], filename = 'part_search_export.csv') {
+  if (!Array.isArray(rows) || rows.length === 0) return
+  const headers: (keyof Company)[] = [
+    'company_name','contact_details','email','quantity','unit_price',
+    'uqc','part_number','item_description',
+    'secondary_buyer','secondary_buyer_contact','secondary_buyer_email'
+  ]
+  const escape = (val: unknown) => {
+    if (val == null) return ''
+    const s = String(val)
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
+    return s
   }
+  const lines = [headers.join(',')]
+  for (const row of rows) {
+    lines.push(headers.map(h => escape(row[h] as string)).join(','))
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 
   // --- JSX ---
   return (
