@@ -67,11 +67,12 @@ export default function QueryPage() {
 
   const selectedPaged = useMemo(() => {
     if (!selectedSource) return undefined
-    const total = selectedSource.total_matches || (selectedSource.companies?.length || 0)
+    const companiesSrc = Array.isArray(selectedSource.companies) ? selectedSource.companies : []
+    const total = selectedSource.total_matches || companiesSrc.length
     const size = showAll ? total : pageSize
     const start = showAll ? 0 : (selectedPage - 1) * pageSize
     const end = showAll ? total : start + pageSize
-    const slice = (selectedSource.companies || []).slice(start, end)
+    const slice = companiesSrc.slice(start, end)
     // Recompute summary for the slice
     let min = Infinity, max = -Infinity, qty = 0
     for (const c of slice) {
@@ -432,7 +433,7 @@ export default function QueryPage() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(r?.companies || []).slice(0, 5).map((c: Company, idx) => (
+                                  {(Array.isArray(r?.companies) ? r?.companies : []).slice(0, 5).map((c: Company, idx) => (
                                     <tr key={idx} className="border-b last:border-0">
                                       <td className="py-1 pr-2">{c.company_name}</td>
                                       <td className="py-1 pr-2">{c.quantity}</td>
