@@ -258,10 +258,25 @@ export default function QueryPage() {
                   </div>
                 </CardContent>
               </Card>
-              <QueryResults results={res} loading={loading} onCopyAnswer={()=>res?.answer && (navigator.clipboard.writeText(res.answer), showToast('Answer copied!','success'))} onCopySQL={()=>{
-                const sqlQuery = (res as any)?.sql?.query || ''
-                if(sqlQuery) navigator.clipboard.writeText(sqlQuery), showToast('SQL copied!','success')
-              }}/>
+             <QueryResults
+  results={res}
+  loading={loading}
+  onCopyAnswer={() => {
+    const answer = (res as any)?.answer as string | undefined
+    if (answer) {
+      navigator.clipboard.writeText(answer)
+      showToast('Answer copied!', 'success')
+    }
+  }}
+  onCopySQL={() => {
+    const sqlQuery = (res as any)?.sql?.query as string | undefined
+    if (sqlQuery) {
+      navigator.clipboard.writeText(sqlQuery)
+      showToast('SQL copied!', 'success')
+    }
+  }}
+/>
+
             </>
           ) : (
             <>
