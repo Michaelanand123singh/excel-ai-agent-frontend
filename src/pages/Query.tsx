@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import { Card, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload, testSearchEndpoint } from '../lib/api'
+import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
+import { formatINR } from '../lib/currency'
 // removed auto-search debounce
 
 export default function QueryPage() {
@@ -91,7 +92,6 @@ export default function QueryPage() {
   const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
-  const [debugInfo, setDebugInfo] = useState<string>('')
   const [params] = useSearchParams()
   const { showToast } = useToast()
   
@@ -196,30 +196,6 @@ export default function QueryPage() {
     }
   }, [fileId, showToast])
 
-  // No refs needed in manual mode
-
-  // No auto-search effects; users must click buttons
-
-  async function testSearch() {
-    if (!fileId) {
-      setError('Please enter a file ID')
-      return
-    }
-    setLoading(true)
-    setError(undefined)
-    try {
-      const result = await testSearchEndpoint(fileId)
-      setDebugInfo(JSON.stringify(result, null, 2))
-      showToast('Debug info retrieved successfully!', 'success')
-    } catch (err: unknown) {
-      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Debug test failed'
-      setError(errorMsg)
-      showToast(errorMsg, 'error')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -254,7 +230,6 @@ export default function QueryPage() {
           {activeTab === 'query' ? (
             <>
               <Card>
-                <CardHeader title="Natural Language Query" description="Ask questions about your data in plain English" />
                 <CardContent>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <Input 
@@ -307,7 +282,6 @@ export default function QueryPage() {
           ) : (
             <>
               <Card>
-                <CardHeader title="Part Number Search" description="Find companies that have a specific part number or run bulk searches" />
                 <CardContent>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <Input 
@@ -328,9 +302,6 @@ export default function QueryPage() {
                         <Button onClick={searchPart} disabled={loading}>
                           {loading ? <Spinner size={16} /> : 'Search'}
                         </Button>
-                        <Button variant="secondary" onClick={testSearch} disabled={loading}>
-                          {loading ? <Spinner size={16} /> : 'Debug'}
-                        </Button>
                   </div>
                   <div className="mt-4 grid grid-cols-1 gap-3">
                     <div className="flex items-center gap-3">
@@ -346,7 +317,7 @@ export default function QueryPage() {
                         <option value="hybrid">Hybrid</option>
                       </select>
                       <div className="text-xs text-gray-500">
-                        Try variations like {partNumber ? `${partNumber.replace(/[-/~.,%*&]/g, '')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '-').replace(/-+/g, '-')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '/').replace(/\/+/g, '/')}` : 'ABC123, ABC-123, ABC/123'}
+                        Try variations like {partNumber ? `${partNumber.replace(/[-\/~.,%*&]/g, '')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '-').replace(/-+/g, '-')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '/').replace(/\/+/g, '/')}` : 'ABC123, ABC-123, ABC/123'}
                       </div>
                     </div>
                     <div>
@@ -431,7 +402,6 @@ export default function QueryPage() {
 
               {bulkResults && (
                 <Card>
-                  <CardHeader title="Bulk Results" description="Grouped by part number" />
                   <CardContent>
                     <div className="space-y-4">
                       {Object.keys(bulkResults).map((pn) => {
@@ -461,10 +431,13 @@ export default function QueryPage() {
                                     <th className="py-1 pr-2">Contact</th>
                                     <th className="py-1 pr-2">Email</th>
                                     <th className="py-1 pr-2">Qty</th>
-                                    <th className="py-1 pr-2">Unit Price</th>
+                                    <th className="py-1 pr-2">Unit Price (INR)</th>
                                     <th className="py-1 pr-2">UQC</th>
                                     <th className="py-1 pr-2">Part</th>
                                     <th className="py-1 pr-2">Description</th>
+                                    <th className="py-1 pr-2">Secondary Buyer</th>
+                                    <th className="py-1 pr-2">Secondary Contact</th>
+                                    <th className="py-1 pr-2">Secondary Email</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -474,10 +447,13 @@ export default function QueryPage() {
                                       <td className="py-1 pr-2">{c.contact_details}</td>
                                       <td className="py-1 pr-2">{c.email}</td>
                                       <td className="py-1 pr-2">{c.quantity}</td>
-                                      <td className="py-1 pr-2">{c.unit_price}</td>
+                                      <td className="py-1 pr-2">{formatINR(c.unit_price)}</td>
                                       <td className="py-1 pr-2">{c.uqc}</td>
                                       <td className="py-1 pr-2">{c.part_number}</td>
                                       <td className="py-1 pr-2">{c.item_description}</td>
+                                      <td className="py-1 pr-2">{(c as any).secondary_buyer || 'N/A'}</td>
+                                      <td className="py-1 pr-2">{(c as any).secondary_buyer_contact || 'N/A'}</td>
+                                      <td className="py-1 pr-2">{(c as any).secondary_buyer_email || 'N/A'}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -493,17 +469,6 @@ export default function QueryPage() {
             </>
           )}
         </div>
-        
-        {debugInfo && (
-          <Card>
-            <CardHeader title="Debug Information" />
-            <CardContent>
-              <pre className="text-xs bg-gray-100 p-3 rounded overflow-auto max-h-64">
-                {debugInfo}
-              </pre>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </div>
   )

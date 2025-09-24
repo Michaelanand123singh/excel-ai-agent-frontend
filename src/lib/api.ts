@@ -186,6 +186,9 @@ export type ApiCompany = {
   uqc: string
   item_description: string
   part_number?: string
+  secondary_buyer?: string
+  secondary_buyer_contact?: string
+  secondary_buyer_email?: string
 }
 
 export type ApiPartSearchResult = {
@@ -264,18 +267,6 @@ export async function listFiles(signal?: AbortSignal) {
 export async function deleteFile(fileId: number) {
   const res = await api.delete(`/api/v1/upload/${fileId}`)
   return res.data as { message: string }
-}
-
-export async function testSearchEndpoint(fileId: number) {
-  const res = await api.get(`/api/v1/query/test-search/${fileId}`)
-  return res.data as { 
-    status: string
-    message?: string
-    table_exists: boolean
-    table_name?: string
-    row_count?: number
-    columns?: Array<{ name: string; type: string }>
-  }
 }
 
 

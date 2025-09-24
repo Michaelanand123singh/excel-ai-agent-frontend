@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, Navigate } from 'react-router-dom'
 import './index.css'
 import { ToastProvider } from './contexts/ToastContext'
 import ProtectedRoute from './components/auth/ProtectedRoute'
@@ -9,7 +9,6 @@ import UploadPage from './pages/Upload'
 import FilesPage from './pages/Files'
 import QueryPage from './pages/Query'
 import AnalyticsPage from './pages/Analytics'
-import BulkSearchPage from './pages/BulkSearch'
 
 export default function App() {
   return (
@@ -27,7 +26,7 @@ export default function App() {
             <Route path="upload" element={<UploadPage />} />
             <Route path="files" element={<FilesPage />} />
             <Route path="query" element={<QueryPage />} />
-            <Route path="bulk-search" element={<BulkSearchPage />} />
+            <Route path="bulk-search" element={<Navigate to="/query" replace />} />
             <Route path="analytics" element={<AnalyticsPage />} />
           </Route>
         </Routes>
