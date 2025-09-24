@@ -3,7 +3,7 @@ import { useAuth } from '../../store/auth'
 import { Button } from '../ui/Button'
 
 export default function Header({ onToggle }: { onToggle: () => void }) {
-  const { username, logout } = useAuth()
+  const { email, logout } = useAuth()
 
   return (
     <div className="h-14 border-b bg-white flex items-center gap-3 px-3 md:px-4">
@@ -18,7 +18,7 @@ export default function Header({ onToggle }: { onToggle: () => void }) {
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <UserIcon className="w-4 h-4" />
-          <span>{username}</span>
+          <span>{email || 'User'}</span>
         </div>
         <Button variant="secondary" onClick={logout}>
           Logout
