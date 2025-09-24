@@ -206,10 +206,7 @@ export type ApiPartSearchResult = {
   match_type?: string
 }
 
-export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
-  const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
-  return res.data as ApiPartSearchResult
-}
+// removed searchPartNumber; use bulk endpoints and client-side pagination instead
 
 export type ApiBulkPartResults = {
   results: Record<string, ApiPartSearchResult | { error: string }>

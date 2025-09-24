@@ -1,15 +1,14 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Card, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload } from '../lib/api'
+import { queryDataset, searchPartNumberBulk, searchPartNumberBulkUpload } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 import { formatINR } from '../lib/currency'
-// removed auto-search debounce
 
 export default function QueryPage() {
   type Company = {
@@ -21,6 +20,9 @@ export default function QueryPage() {
     uqc: string
     item_description: string
     part_number?: string
+    secondary_buyer?: string
+    secondary_buyer_contact?: string
+    secondary_buyer_email?: string
   }
   type PartSearchResult = {
     companies: Company[]
@@ -45,15 +47,63 @@ export default function QueryPage() {
   const [fileId, setFileId] = useState<number>(0)
   const [q, setQ] = useState('count rows')
   const [res, setRes] = useState<Record<string, unknown>>()
-  const [partNumber, setPartNumber] = useState('')
   const [bulkInput, setBulkInput] = useState('')
   const [bulkResults, setBulkResults] = useState<Record<string, PartSearchResult> | null>(null)
   const [bulkUploading, setBulkUploading] = useState(false)
-  const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
-  const [partPage, setPartPage] = useState(1)
+  const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>()
+  const [params] = useSearchParams()
+  const { showToast } = useToast()
+
   const [pageSize, setPageSize] = useState(50)
   const [showAll, setShowAll] = useState(false)
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
+
+  const [selectedPart, setSelectedPart] = useState<string>('')
+  const [selectedPage, setSelectedPage] = useState(1)
+
+  const selectedSource = useMemo(() => (selectedPart && bulkResults ? bulkResults[selectedPart] : undefined), [selectedPart, bulkResults])
+
+  const selectedPaged = useMemo(() => {
+    if (!selectedSource) return undefined
+    const total = selectedSource.total_matches || (selectedSource.companies?.length || 0)
+    const size = showAll ? total : pageSize
+    const start = showAll ? 0 : (selectedPage - 1) * pageSize
+    const end = showAll ? total : start + pageSize
+    const slice = (selectedSource.companies || []).slice(start, end)
+    // Recompute summary for the slice
+    let min = Infinity, max = -Infinity, qty = 0
+    for (const c of slice) {
+      const p = typeof c.unit_price === 'number' ? c.unit_price : Number(String(c.unit_price).replace(/[^0-9.-]/g, ''))
+      const qn = typeof c.quantity === 'number' ? c.quantity : Number(String(c.quantity).replace(/[^0-9.-]/g, ''))
+      if (!Number.isNaN(p)) {
+        if (p < min) min = p
+        if (p > max) max = p
+      }
+      if (!Number.isNaN(qn)) qty += qn
+    }
+    const price_summary = {
+      min_price: Number.isFinite(min) ? min : 0,
+      max_price: Number.isFinite(max) ? max : 0,
+      total_quantity: qty,
+      avg_price: slice.length ? Number(((Number.isFinite(min) && Number.isFinite(max) ? (min + max) / 2 : 0)).toFixed(2)) : 0,
+    }
+    return {
+      companies: slice,
+      total_matches: total,
+      part_number: selectedPart,
+      message: selectedSource.message || '',
+      latency_ms: selectedSource.latency_ms,
+      cached: selectedSource.cached,
+      price_summary,
+      page: selectedPage,
+      page_size: size,
+      total_pages: showAll ? 1 : Math.max(1, Math.ceil(total / pageSize)),
+      search_mode: selectedSource.search_mode,
+      match_type: selectedSource.match_type,
+    } as PartSearchResult
+  }, [selectedSource, selectedPart, selectedPage, pageSize, showAll])
 
   function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
     if (!Array.isArray(rows) || rows.length === 0) return
@@ -66,7 +116,9 @@ export default function QueryPage() {
       'uqc',
       'part_number',
       'item_description',
-      'secondary_buyer'
+      'secondary_buyer',
+      'secondary_buyer_contact',
+      'secondary_buyer_email'
     ]
     const escape = (val: unknown) => {
       if (val === null || val === undefined) return ''
@@ -89,18 +141,11 @@ export default function QueryPage() {
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
   }
-  const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string>()
-  const [params] = useSearchParams()
-  const { showToast } = useToast()
-  
-  // Manual search only; no debounce auto-trigger
-  
-  useEffect(()=>{
+
+  useEffect(() => {
     const id = parseInt(params.get('fileId') || '0')
     if (id) setFileId(id)
-  },[params])
+  }, [params])
 
   const ask = useCallback(async () => {
     if (!fileId) {
@@ -122,31 +167,6 @@ export default function QueryPage() {
     }
   }, [fileId, q, showToast])
 
-  const searchPart = useCallback(async () => {
-    if (!fileId) {
-      setError('Please enter a file ID')
-      return
-    }
-    if (!partNumber.trim()) {
-      setError('Please enter a part number')
-      return
-    }
-    setLoading(true)
-    setError(undefined)
-    try {
-      const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll, searchMode)
-      setPartResults(r as unknown as PartSearchResult)
-      setPartPage(1)
-      showToast(`Found ${(r as { total_matches: number }).total_matches} companies with part number "${partNumber}"`, 'success')
-    } catch (err: unknown) {
-      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Search failed'
-      setError(errorMsg)
-      showToast(errorMsg, 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [fileId, partNumber, pageSize, showAll, searchMode, showToast])
-
   const runBulkTextSearch = useCallback(async () => {
     if (!fileId) {
       setError('Please enter a file ID')
@@ -166,6 +186,11 @@ export default function QueryPage() {
     try {
       const r = await searchPartNumberBulk(fileId, parts, 1, pageSize, showAll, searchMode)
       setBulkResults(r.results as unknown as Record<string, PartSearchResult>)
+      const first = Object.keys(r.results || {})[0]
+      if (first) {
+        setSelectedPart(first)
+        setSelectedPage(1)
+      }
       showToast(`Searched ${r.total_parts} part numbers`, 'success')
     } catch (err: unknown) {
       const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Bulk search failed'
@@ -186,6 +211,11 @@ export default function QueryPage() {
     try {
       const r = await searchPartNumberBulkUpload(fileId, f)
       setBulkResults(r.results as unknown as Record<string, PartSearchResult>)
+      const first = Object.keys(r.results || {})[0]
+      if (first) {
+        setSelectedPart(first)
+        setSelectedPage(1)
+      }
       showToast(`Searched ${r.total_parts} part numbers from file`, 'success')
     } catch (err: unknown) {
       const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Bulk upload failed'
@@ -217,7 +247,6 @@ export default function QueryPage() {
           </Button>
         </div>
       </div>
-      
 
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-md">
@@ -240,13 +269,13 @@ export default function QueryPage() {
                       onChange={e => setFileId(parseInt(e.target.value || '0'))}
                       disabled={loading}
                     />
-                        <Input 
-                          className="flex-1" 
-                          placeholder="Ask about your data..." 
-                          value={q} 
-                          onChange={e => setQ(e.target.value)}
-                          disabled={loading}
-                        />
+                    <Input 
+                      className="flex-1" 
+                      placeholder="Ask about your data..." 
+                      value={q} 
+                      onChange={e => setQ(e.target.value)}
+                      disabled={loading}
+                    />
                     <Button onClick={ask} disabled={loading}>
                       {loading ? <Spinner size={16} /> : 'Send'}
                     </Button>
@@ -292,16 +321,6 @@ export default function QueryPage() {
                       onChange={e => setFileId(parseInt(e.target.value || '0'))}
                       disabled={loading}
                     />
-                        <Input 
-                          className="flex-1" 
-                          placeholder="Enter part number..." 
-                          value={partNumber} 
-                          onChange={e => setPartNumber(e.target.value)}
-                          disabled={loading}
-                        />
-                        <Button onClick={searchPart} disabled={loading}>
-                          {loading ? <Spinner size={16} /> : 'Search'}
-                        </Button>
                   </div>
                   <div className="mt-4 grid grid-cols-1 gap-3">
                     <div className="flex items-center gap-3">
@@ -316,12 +335,9 @@ export default function QueryPage() {
                         <option value="fuzzy">Fuzzy</option>
                         <option value="hybrid">Hybrid</option>
                       </select>
-                      <div className="text-xs text-gray-500">
-                        Try variations like {partNumber ? `${partNumber.replace(/[-\/~.,%*&]/g, '')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '-').replace(/-+/g, '-')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '/').replace(/\/+/g, '/')}` : 'ABC123, ABC-123, ABC/123'}
-                      </div>
                     </div>
                     <div>
-                      <label className="text-sm font-medium">Bulk part numbers (comma or newline separated)</label>
+                      <label className="text-sm font-medium">Part numbers (comma or newline separated)</label>
                       <textarea 
                         className="mt-1 w-full border rounded p-2 min-h-[100px]"
                         placeholder={"e.g. PN123, PN456,\nPN789"}
@@ -329,9 +345,9 @@ export default function QueryPage() {
                         onChange={e => setBulkInput(e.target.value)}
                         disabled={loading}
                       />
-                      <div className="flex gap-2 mt-2">
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
                         <Button onClick={runBulkTextSearch} disabled={loading}>
-                          {loading ? <Spinner size={16} /> : 'Run Bulk Search'}
+                          {loading ? <Spinner size={16} /> : 'Run Search'}
                         </Button>
                         <label className="inline-flex items-center gap-2 cursor-pointer">
                           <input 
@@ -344,61 +360,40 @@ export default function QueryPage() {
                             disabled={bulkUploading}
                           />
                         </label>
+                        <div className="flex items-center gap-3 ml-auto">
+                          <label className="text-sm font-medium">Page size</label>
+                          <select
+                            className="border rounded px-2 py-1 text-sm"
+                            value={pageSize}
+                            onChange={(e) => {
+                              const size = parseInt(e.target.value)
+                              setPageSize(size)
+                              setSelectedPage(1)
+                            }}
+                            disabled={loading}
+                          >
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                          </select>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={showAll}
+                              onChange={(e) => {
+                                setShowAll(e.target.checked)
+                                setSelectedPage(1)
+                              }}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="text-sm">Show all</span>
+                          </label>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </CardContent>
               </Card>
-              {!bulkResults && (
-                <SearchResults
-                results={partResults as unknown as {
-                  companies: Company[]
-                  total_matches: number
-                  part_number: string
-                  message: string
-                  latency_ms?: number
-                  cached?: boolean
-                  price_summary?: { min_price: number; max_price: number; total_quantity: number; avg_price: number }
-                } | undefined}
-                loading={loading}
-                onExportCSV={() => exportCompaniesToCSV(
-                  ((partResults as Record<string, unknown>)?.companies as Record<string, unknown>[]) || [], 
-                  `part_search_${(partResults as Record<string, unknown>)?.part_number || 'export'}.csv`
-                )}
-                onPageChange={async (page: number) => {
-                  setPartPage(page)
-                  try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), page, pageSize, showAll, searchMode)
-                    setPartResults(r as unknown as PartSearchResult)
-                  } catch (error) {
-                    console.error('Page change error:', error)
-                  }
-                }}
-                onPageSizeChange={async (size: number) => {
-                  setPageSize(size)
-                  setPartPage(1)
-                  try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, size, showAll, searchMode)
-                    setPartResults(r as unknown as PartSearchResult)
-                  } catch (error) {
-                    console.error('Page size change error:', error)
-                  }
-                }}
-                onShowAllChange={async (showAll: boolean) => {
-                  setShowAll(showAll)
-                  setPartPage(1)
-                  try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll, searchMode)
-                    setPartResults(r as unknown as PartSearchResult)
-                  } catch (error) {
-                    console.error('Show all change error:', error)
-                  }
-                }}
-                currentPage={partPage}
-                pageSize={pageSize}
-                showAll={showAll}
-              />
-              )}
 
               {bulkResults && (
                 <Card>
@@ -406,54 +401,43 @@ export default function QueryPage() {
                     <div className="space-y-4">
                       {Object.keys(bulkResults).map((pn) => {
                         const r = bulkResults[pn]
-                        if (!r || r.error) {
-                          return (
-                            <div key={pn} className="p-3 border rounded">
-                              <div className="font-medium">{pn}</div>
-                              <div className="text-red-600 text-sm">{r.error || 'No results'}</div>
-                            </div>
-                          )
-                        }
                         return (
-                          <div key={pn} className="p-3 border rounded">
+                          <div key={pn} className={`p-3 border rounded ${selectedPart === pn ? 'bg-blue-50 border-blue-200' : ''}`}>
                             <div className="flex items-center justify-between">
-                              <div className="font-medium">{pn} — {r.total_matches} matches <span className="text-xs text-gray-500">[{r.search_mode || 'hybrid'}:{r.match_type || 'n/a'}]</span></div>
-                              <Button 
-                                variant="secondary"
-                                onClick={() => exportCompaniesToCSV(r.companies || [], `part_${pn}.csv`)}
-                              >Export CSV</Button>
+                              <div className="font-medium">
+                                {pn} — {r?.total_matches || 0} matches <span className="text-xs text-gray-500">[{r?.search_mode || 'hybrid'}:{r?.match_type || 'n/a'}]</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button 
+                                  variant="secondary"
+                                  onClick={() => {
+                                    setSelectedPart(pn)
+                                    setSelectedPage(1)
+                                  }}
+                                >View details</Button>
+                                <Button 
+                                  variant="secondary"
+                                  onClick={() => exportCompaniesToCSV((r?.companies || []) as unknown as Record<string, unknown>[], `part_${pn}.csv`)}
+                                >Export CSV</Button>
+                              </div>
                             </div>
                             <div className="mt-2 overflow-x-auto">
                               <table className="w-full text-sm">
                                 <thead>
                                   <tr className="text-left border-b">
                                     <th className="py-1 pr-2">Company</th>
-                                    <th className="py-1 pr-2">Contact</th>
-                                    <th className="py-1 pr-2">Email</th>
                                     <th className="py-1 pr-2">Qty</th>
                                     <th className="py-1 pr-2">Unit Price (INR)</th>
-                                    <th className="py-1 pr-2">UQC</th>
-                                    <th className="py-1 pr-2">Part</th>
-                                    <th className="py-1 pr-2">Description</th>
                                     <th className="py-1 pr-2">Secondary Buyer</th>
-                                    <th className="py-1 pr-2">Secondary Contact</th>
-                                    <th className="py-1 pr-2">Secondary Email</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(r.companies || []).slice(0, 100).map((c: Company, idx) => (
+                                  {(r?.companies || []).slice(0, 5).map((c: Company, idx) => (
                                     <tr key={idx} className="border-b last:border-0">
                                       <td className="py-1 pr-2">{c.company_name}</td>
-                                      <td className="py-1 pr-2">{c.contact_details}</td>
-                                      <td className="py-1 pr-2">{c.email}</td>
                                       <td className="py-1 pr-2">{c.quantity}</td>
                                       <td className="py-1 pr-2">{formatINR(c.unit_price)}</td>
-                                      <td className="py-1 pr-2">{c.uqc}</td>
-                                      <td className="py-1 pr-2">{c.part_number}</td>
-                                      <td className="py-1 pr-2">{c.item_description}</td>
-                                      <td className="py-1 pr-2">{(c as any).secondary_buyer || 'N/A'}</td>
-                                      <td className="py-1 pr-2">{(c as any).secondary_buyer_contact || 'N/A'}</td>
-                                      <td className="py-1 pr-2">{(c as any).secondary_buyer_email || 'N/A'}</td>
+                                      <td className="py-1 pr-2">{c.secondary_buyer || 'N/A'}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -465,6 +449,39 @@ export default function QueryPage() {
                     </div>
                   </CardContent>
                 </Card>
+              )}
+
+              {selectedPart && selectedPaged && (
+                <SearchResults
+                  results={selectedPaged as unknown as {
+                    companies: Company[]
+                    total_matches: number
+                    part_number: string
+                    message: string
+                    latency_ms?: number
+                    cached?: boolean
+                    price_summary?: { min_price: number; max_price: number; total_quantity: number; avg_price: number }
+                  } | undefined}
+                  loading={loading}
+                  onExportCSV={() => exportCompaniesToCSV(
+                    ((selectedPaged as Record<string, unknown>)?.companies as Record<string, unknown>[]) || [],
+                    `part_search_${selectedPart}.csv`
+                  )}
+                  onPageChange={(page: number) => {
+                    setSelectedPage(page)
+                  }}
+                  onPageSizeChange={(size: number) => {
+                    setPageSize(size)
+                    setSelectedPage(1)
+                  }}
+                  onShowAllChange={(all: boolean) => {
+                    setShowAll(all)
+                    setSelectedPage(1)
+                  }}
+                  currentPage={selectedPage}
+                  pageSize={pageSize}
+                  showAll={showAll}
+                />
               )}
             </>
           )}
