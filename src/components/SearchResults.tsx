@@ -63,9 +63,10 @@ export function SearchResults({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
 
   const sortedCompanies = useMemo(() => {
-    if (!sortField || !results?.companies) return results?.companies || []
-    
-    return [...(results?.companies || [])].sort((a, b) => {
+    const base: Company[] = Array.isArray(results?.companies) ? results!.companies : []
+    if (!sortField) return base
+
+    return [...base].sort((a, b) => {
       const aVal = a[sortField]
       const bVal = b[sortField]
       
@@ -80,7 +81,7 @@ export function SearchResults({
         ? aStr.localeCompare(bStr)
         : bStr.localeCompare(aStr)
     })
-  }, [results?.companies, sortField, sortDirection])
+  }, [results, sortField, sortDirection])
 
   const handleSort = (field: keyof Company) => {
     if (sortField === field) {

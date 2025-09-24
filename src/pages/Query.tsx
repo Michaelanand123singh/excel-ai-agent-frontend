@@ -5,7 +5,7 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumberBulk, searchPartNumberBulkUpload } from '../lib/api'
+import { queryDataset, searchPartNumberBulk, searchPartNumberBulkUpload, searchPartNumber } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 import { formatINR } from '../lib/currency'
@@ -66,6 +66,7 @@ export default function QueryPage() {
   const selectedSource = useMemo(() => (selectedPart && bulkResults ? bulkResults[selectedPart] : undefined), [selectedPart, bulkResults])
 
   const selectedPaged = useMemo(() => {
+    // client-side slice is used only before first server load
     if (!selectedSource) return undefined
     const companiesSrc = Array.isArray(selectedSource.companies) ? selectedSource.companies : []
     const total = selectedSource.total_matches || companiesSrc.length
@@ -73,23 +74,6 @@ export default function QueryPage() {
     const start = showAll ? 0 : (selectedPage - 1) * pageSize
     const end = showAll ? total : start + pageSize
     const slice = companiesSrc.slice(start, end)
-    // Recompute summary for the slice
-    let min = Infinity, max = -Infinity, qty = 0
-    for (const c of slice) {
-      const p = typeof c.unit_price === 'number' ? c.unit_price : Number(String(c.unit_price).replace(/[^0-9.-]/g, ''))
-      const qn = typeof c.quantity === 'number' ? c.quantity : Number(String(c.quantity).replace(/[^0-9.-]/g, ''))
-      if (!Number.isNaN(p)) {
-        if (p < min) min = p
-        if (p > max) max = p
-      }
-      if (!Number.isNaN(qn)) qty += qn
-    }
-    const price_summary = {
-      min_price: Number.isFinite(min) ? min : 0,
-      max_price: Number.isFinite(max) ? max : 0,
-      total_quantity: qty,
-      avg_price: slice.length ? Number(((Number.isFinite(min) && Number.isFinite(max) ? (min + max) / 2 : 0)).toFixed(2)) : 0,
-    }
     return {
       companies: slice,
       total_matches: total,
@@ -97,7 +81,7 @@ export default function QueryPage() {
       message: selectedSource.message || '',
       latency_ms: selectedSource.latency_ms,
       cached: selectedSource.cached,
-      price_summary,
+      price_summary: selectedSource.price_summary,
       page: selectedPage,
       page_size: size,
       total_pages: showAll ? 1 : Math.max(1, Math.ceil(total / pageSize)),
@@ -468,16 +452,50 @@ export default function QueryPage() {
                     ((selectedPaged as Record<string, unknown>)?.companies as Record<string, unknown>[]) || [],
                     `part_search_${selectedPart}.csv`
                   )}
-                  onPageChange={(page: number) => {
+                  onPageChange={async (page: number) => {
                     setSelectedPage(page)
+                    try {
+                      const r = await searchPartNumber(fileId, selectedPart, page, pageSize, showAll, searchMode)
+                      // replace source so summary and companies come from server
+                      if (bulkResults && bulkResults[selectedPart]) {
+                        setBulkResults({
+                          ...bulkResults,
+                          [selectedPart]: r as unknown as PartSearchResult,
+                        })
+                      }
+                    } catch (e) {
+                      console.error('Page change error:', e)
+                    }
                   }}
-                  onPageSizeChange={(size: number) => {
+                  onPageSizeChange={async (size: number) => {
                     setPageSize(size)
                     setSelectedPage(1)
+                    try {
+                      const r = await searchPartNumber(fileId, selectedPart, 1, size, showAll, searchMode)
+                      if (bulkResults && bulkResults[selectedPart]) {
+                        setBulkResults({
+                          ...bulkResults,
+                          [selectedPart]: r as unknown as PartSearchResult,
+                        })
+                      }
+                    } catch (e) {
+                      console.error('Page size change error:', e)
+                    }
                   }}
-                  onShowAllChange={(all: boolean) => {
+                  onShowAllChange={async (all: boolean) => {
                     setShowAll(all)
                     setSelectedPage(1)
+                    try {
+                      const r = await searchPartNumber(fileId, selectedPart, 1, pageSize, all, searchMode)
+                      if (bulkResults && bulkResults[selectedPart]) {
+                        setBulkResults({
+                          ...bulkResults,
+                          [selectedPart]: r as unknown as PartSearchResult,
+                        })
+                      }
+                    } catch (e) {
+                      console.error('Show all change error:', e)
+                    }
                   }}
                   currentPage={selectedPage}
                   pageSize={pageSize}
