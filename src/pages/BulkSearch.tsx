@@ -6,6 +6,7 @@ import { Spinner } from '../components/ui/Spinner'
 import { Badge } from '../components/ui/Badge'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/Table'
 import { useToast } from '../hooks/useToast'
+import { api } from '../lib/api'
 
 interface UserPartData {
   part_number: string
@@ -130,20 +131,10 @@ export default function BulkSearchPage() {
       formData.append('file_id', fileId.toString())
       formData.append('search_mode', searchMode)
 
-      const response = await fetch('/api/v1/bulk-search/bulk-excel-search', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+      const { data } = await api.post('/api/v1/bulk-search/bulk-excel-search', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.detail || 'Search failed')
-      }
-
-      const data = await response.json()
       setResults(data)
       showToast(`Search completed! Found ${data.upload_summary.found_matches} matches`, 'success')
     } catch (err: unknown) {
@@ -159,21 +150,8 @@ export default function BulkSearchPage() {
     if (!results) return
 
     try {
-      const response = await fetch('/api/v1/bulk-search/bulk-search-export', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ results, format })
-      })
-
-      if (!response.ok) {
-        throw new Error('Export failed')
-      }
-
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
+      const { data } = await api.post('/api/v1/bulk-search/bulk-search-export', { results, format }, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(data)
       const a = document.createElement('a')
       a.href = url
       a.download = `bulk_search_results.${format === 'excel' ? 'xlsx' : 'csv'}`

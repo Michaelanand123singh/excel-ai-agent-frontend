@@ -1,8 +1,11 @@
 import axios from 'axios'
-// Prefer environment variable, fallback to current origin
-const envBase = import.meta.env?.VITE_API_BASE_URL as string | undefined
+// Prefer build-time env; else runtime window override; else current origin
+type ImportMetaWithEnv = ImportMeta & { env?: Record<string, unknown> & { VITE_API_BASE_URL?: string } }
+const envBase = (import.meta as ImportMetaWithEnv)?.env?.VITE_API_BASE_URL as string | undefined
+declare global { interface Window { __API_BASE_URL__?: string } }
+const runtimeBase = typeof window !== 'undefined' ? window.__API_BASE_URL__ : undefined
 const originBase = typeof window !== 'undefined' ? window.location.origin : ''
-const API_BASE = envBase && envBase.trim().length > 0 ? envBase.trim() : originBase
+const API_BASE = (envBase && envBase.trim()) || (runtimeBase && runtimeBase.trim()) || originBase
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
 console.log('Final API_BASE_URL:', API_BASE)
@@ -12,6 +15,15 @@ export const api = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
 })
+
+export function setRuntimeApiBase(url?: string) {
+  if (typeof window === 'undefined') return
+  if (url && url.trim()) {
+    window.__API_BASE_URL__ = url.trim()
+    api.defaults.baseURL = url.trim()
+    console.info('Runtime API base updated to:', url.trim())
+  }
+}
 
 // Developer console logging for API calls and duplicate detection
 type ApiMeta = { requestId: string; startedAtMs: number }
