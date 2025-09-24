@@ -1,24 +1,12 @@
 import axios from 'axios'
-// const getApiBaseUrl = () => {
-//   // Prefer environment variable
-//   if (import.meta.env.VITE_API_BASE_URL) {
-//     return import.meta.env.VITE_API_BASE_URL;
-//   }
+// Prefer environment variable, fallback to current origin
+const envBase = import.meta.env?.VITE_API_BASE_URL as string | undefined
+const originBase = typeof window !== 'undefined' ? window.location.origin : ''
+const API_BASE = envBase && envBase.trim().length > 0 ? envBase.trim() : originBase
 
-//   // Development mode fallback
-//   if (import.meta.env.MODE === 'development') {
-//     return 'http://localhost:5173';
-//   }
-
-//   // If env var is missing in production, throw an error instead of silently falling back
-//   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
-// };
-
-const API_BASE = "https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app";
-
-console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL);
-console.log('Final API_BASE_URL:', API_BASE);
-console.log('Full API URL:', `${API_BASE}/api`);
+console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
+console.log('Final API_BASE_URL:', API_BASE)
+console.log('Full API URL:', `${API_BASE}/api`)
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -121,7 +109,6 @@ api.interceptors.response.use(
     console.info('Request', { headers: cfg?.headers, params: cfg?.params, data: cfg?.data })
     console.groupEnd()
 
-    // Retry with exponential backoff on network/timeout (up to 2 retries)
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '')
     const isNetwork = !error.response
     const status = error.response?.status
@@ -136,7 +123,6 @@ api.interceptors.response.use(
       return new Promise((resolve) => setTimeout(resolve, delay)).then(() => api(cfgWithRetry))
     }
 
-    // 401 handling: set cooldown to prevent flooding
     if (status === 401) {
       lastAuthErrorAt = Date.now()
     }
@@ -205,8 +191,6 @@ export type ApiPartSearchResult = {
   search_mode?: string
   match_type?: string
 }
-
-// removed searchPartNumber; use bulk endpoints and client-side pagination instead
 
 export type ApiBulkPartResults = {
   results: Record<string, ApiPartSearchResult | { error: string }>
