@@ -11,17 +11,48 @@ import { useToast } from '../hooks/useToast'
 // removed auto-search debounce
 
 export default function QueryPage() {
+  type Company = {
+    company_name: string
+    contact_details: string
+    email: string
+    quantity: number | string
+    unit_price: number | string
+    uqc: string
+    item_description: string
+    part_number?: string
+  }
+  type PartSearchResult = {
+    companies: Company[]
+    total_matches: number
+    part_number: string
+    message?: string
+    latency_ms?: number
+    cached?: boolean
+    price_summary?: {
+      min_price: number
+      max_price: number
+      total_quantity: number
+      avg_price?: number
+    }
+    page?: number
+    page_size?: number
+    total_pages?: number
+    search_mode?: string
+    match_type?: string
+    error?: string
+  }
   const [fileId, setFileId] = useState<number>(0)
   const [q, setQ] = useState('count rows')
   const [res, setRes] = useState<Record<string, unknown>>()
   const [partNumber, setPartNumber] = useState('')
   const [bulkInput, setBulkInput] = useState('')
-  const [bulkResults, setBulkResults] = useState<Record<string, any> | null>(null)
+  const [bulkResults, setBulkResults] = useState<Record<string, PartSearchResult> | null>(null)
   const [bulkUploading, setBulkUploading] = useState(false)
-  const [partResults, setPartResults] = useState<Record<string, unknown>>()
+  const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
   const [partPage, setPartPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [showAll, setShowAll] = useState(false)
+  const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
 
   function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
     if (!Array.isArray(rows) || rows.length === 0) return
@@ -103,8 +134,8 @@ export default function QueryPage() {
     setLoading(true)
     setError(undefined)
     try {
-      const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll)
-      setPartResults(r)
+      const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll, searchMode)
+      setPartResults(r as unknown as PartSearchResult)
       setPartPage(1)
       showToast(`Found ${(r as { total_matches: number }).total_matches} companies with part number "${partNumber}"`, 'success')
     } catch (err: unknown) {
@@ -114,7 +145,7 @@ export default function QueryPage() {
     } finally {
       setLoading(false)
     }
-  }, [fileId, partNumber, pageSize, showAll, showToast])
+  }, [fileId, partNumber, pageSize, showAll, searchMode, showToast])
 
   const runBulkTextSearch = useCallback(async () => {
     if (!fileId) {
@@ -133,8 +164,8 @@ export default function QueryPage() {
     setLoading(true)
     setError(undefined)
     try {
-      const r = await searchPartNumberBulk(fileId, parts, 1, pageSize, showAll)
-      setBulkResults(r.results)
+      const r = await searchPartNumberBulk(fileId, parts, 1, pageSize, showAll, searchMode)
+      setBulkResults(r.results as unknown as Record<string, PartSearchResult>)
       showToast(`Searched ${r.total_parts} part numbers`, 'success')
     } catch (err: unknown) {
       const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Bulk search failed'
@@ -143,7 +174,7 @@ export default function QueryPage() {
     } finally {
       setLoading(false)
     }
-  }, [fileId, bulkInput, pageSize, showAll, showToast])
+  }, [fileId, bulkInput, pageSize, showAll, searchMode, showToast])
 
   const runBulkUpload = useCallback(async (f: File) => {
     if (!fileId) {
@@ -154,7 +185,7 @@ export default function QueryPage() {
     setError(undefined)
     try {
       const r = await searchPartNumberBulkUpload(fileId, f)
-      setBulkResults(r.results as Record<string, any>)
+      setBulkResults(r.results as unknown as Record<string, PartSearchResult>)
       showToast(`Searched ${r.total_parts} part numbers from file`, 'success')
     } catch (err: unknown) {
       const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Bulk upload failed'
@@ -265,7 +296,7 @@ export default function QueryPage() {
                   }
                 }}
                 onCopySQL={() => {
-                  const sqlQuery = (res as any)?.sql?.query
+                  const sqlQuery = (res && typeof (res as Record<string, unknown>).sql === 'object' && (res as { sql?: { query?: string } }).sql?.query) || ''
                   if (sqlQuery) {
                     navigator.clipboard.writeText(sqlQuery)
                     showToast('SQL query copied to clipboard!', 'success')
@@ -302,6 +333,22 @@ export default function QueryPage() {
                         </Button>
                   </div>
                   <div className="mt-4 grid grid-cols-1 gap-3">
+                    <div className="flex items-center gap-3">
+                      <label className="text-sm font-medium">Search mode</label>
+                      <select
+                        className="border rounded px-2 py-1 text-sm"
+                        value={searchMode}
+                        onChange={e => setSearchMode(e.target.value as 'exact' | 'fuzzy' | 'hybrid')}
+                        disabled={loading}
+                      >
+                        <option value="exact">Exact</option>
+                        <option value="fuzzy">Fuzzy</option>
+                        <option value="hybrid">Hybrid</option>
+                      </select>
+                      <div className="text-xs text-gray-500">
+                        Try variations like {partNumber ? `${partNumber.replace(/[-/~.,%*&]/g, '')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '-').replace(/-+/g, '-')}, ${partNumber.replace(/[^A-Za-z0-9]/g, '/').replace(/\/+/g, '/')}` : 'ABC123, ABC-123, ABC/123'}
+                      </div>
+                    </div>
                     <div>
                       <label className="text-sm font-medium">Bulk part numbers (comma or newline separated)</label>
                       <textarea 
@@ -333,28 +380,14 @@ export default function QueryPage() {
               </Card>
               {!bulkResults && (
                 <SearchResults
-                results={partResults as {
-                  companies: Array<{
-                    company_name: string
-                    contact_details: string
-                    email: string
-                    quantity: number | string
-                    unit_price: number | string
-                    uqc: string
-                    item_description: string
-                    part_number?: string
-                  }>
+                results={partResults as unknown as {
+                  companies: Company[]
                   total_matches: number
                   part_number: string
                   message: string
-                  latency_ms: number
-                  cached: boolean
-                  price_summary?: {
-                    min_price: number
-                    max_price: number
-                    total_quantity: number
-                    avg_price: number
-                  }
+                  latency_ms?: number
+                  cached?: boolean
+                  price_summary?: { min_price: number; max_price: number; total_quantity: number; avg_price: number }
                 } | undefined}
                 loading={loading}
                 onExportCSV={() => exportCompaniesToCSV(
@@ -364,8 +397,8 @@ export default function QueryPage() {
                 onPageChange={async (page: number) => {
                   setPartPage(page)
                   try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), page, pageSize, showAll)
-                    setPartResults(r)
+                    const r = await searchPartNumber(fileId, partNumber.trim(), page, pageSize, showAll, searchMode)
+                    setPartResults(r as unknown as PartSearchResult)
                   } catch (error) {
                     console.error('Page change error:', error)
                   }
@@ -374,8 +407,8 @@ export default function QueryPage() {
                   setPageSize(size)
                   setPartPage(1)
                   try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, size, showAll)
-                    setPartResults(r)
+                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, size, showAll, searchMode)
+                    setPartResults(r as unknown as PartSearchResult)
                   } catch (error) {
                     console.error('Page size change error:', error)
                   }
@@ -384,8 +417,8 @@ export default function QueryPage() {
                   setShowAll(showAll)
                   setPartPage(1)
                   try {
-                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll)
-                    setPartResults(r)
+                    const r = await searchPartNumber(fileId, partNumber.trim(), 1, pageSize, showAll, searchMode)
+                    setPartResults(r as unknown as PartSearchResult)
                   } catch (error) {
                     console.error('Show all change error:', error)
                   }
@@ -402,19 +435,19 @@ export default function QueryPage() {
                   <CardContent>
                     <div className="space-y-4">
                       {Object.keys(bulkResults).map((pn) => {
-                        const r = bulkResults[pn] as any
+                        const r = bulkResults[pn]
                         if (!r || r.error) {
                           return (
                             <div key={pn} className="p-3 border rounded">
                               <div className="font-medium">{pn}</div>
-                              <div className="text-red-600 text-sm">{r?.error || 'No results'}</div>
+                              <div className="text-red-600 text-sm">{r.error || 'No results'}</div>
                             </div>
                           )
                         }
                         return (
                           <div key={pn} className="p-3 border rounded">
                             <div className="flex items-center justify-between">
-                              <div className="font-medium">{pn} — {r.total_matches} matches</div>
+                              <div className="font-medium">{pn} — {r.total_matches} matches <span className="text-xs text-gray-500">[{r.search_mode || 'hybrid'}:{r.match_type || 'n/a'}]</span></div>
                               <Button 
                                 variant="secondary"
                                 onClick={() => exportCompaniesToCSV(r.companies || [], `part_${pn}.csv`)}
@@ -435,7 +468,7 @@ export default function QueryPage() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(r.companies || []).slice(0, 100).map((c: any, idx: number) => (
+                                  {(r.companies || []).slice(0, 100).map((c: Company, idx) => (
                                     <tr key={idx} className="border-b last:border-0">
                                       <td className="py-1 pr-2">{c.company_name}</td>
                                       <td className="py-1 pr-2">{c.contact_details}</td>

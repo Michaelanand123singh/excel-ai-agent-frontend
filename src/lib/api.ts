@@ -177,37 +177,47 @@ export async function queryDataset(fileId: number, question: string) {
   return res.data as Record<string, unknown>
 }
 
-export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 50, showAll = false) {
-  const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll })
-  return res.data as {
-    part_number: string
-    total_matches: number
-    companies: Record<string, unknown>[]
-    page: number
-    page_size: number
-    total_pages: number
-    show_all?: boolean
-    message: string
-  }
+export type ApiCompany = {
+  company_name: string
+  contact_details: string
+  email: string
+  quantity: number | string
+  unit_price: number | string
+  uqc: string
+  item_description: string
+  part_number?: string
 }
 
-export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false) {
-  const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll })
-  return res.data as {
-    results: Record<string, {
-      part_number?: string
-      total_matches?: number
-      companies?: Array<Record<string, unknown>>
-      page?: number
-      page_size?: number
-      total_pages?: number
-      price_summary?: Record<string, number>
-      error?: string
-    }>
-    total_parts: number
-    latency_ms: number
-    file_id: number
-  }
+export type ApiPartSearchResult = {
+  part_number: string
+  total_matches: number
+  companies: ApiCompany[]
+  page: number
+  page_size: number
+  total_pages: number
+  show_all?: boolean
+  message: string
+  cached?: boolean
+  latency_ms?: number
+  search_mode?: string
+  match_type?: string
+}
+
+export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
+  return res.data as ApiPartSearchResult
+}
+
+export type ApiBulkPartResults = {
+  results: Record<string, ApiPartSearchResult | { error: string }>
+  total_parts: number
+  latency_ms: number
+  file_id: number
+}
+
+export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
+  return res.data as ApiBulkPartResults
 }
 
 export async function searchPartNumberBulkUpload(fileId: number, file: File) {

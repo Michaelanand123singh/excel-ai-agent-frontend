@@ -9,6 +9,7 @@ import UploadPage from './pages/Upload'
 import FilesPage from './pages/Files'
 import QueryPage from './pages/Query'
 import AnalyticsPage from './pages/Analytics'
+import BulkSearchPage from './pages/BulkSearch'
 
 export default function App() {
   return (
@@ -26,6 +27,7 @@ export default function App() {
             <Route path="upload" element={<UploadPage />} />
             <Route path="files" element={<FilesPage />} />
             <Route path="query" element={<QueryPage />} />
+            <Route path="bulk-search" element={<BulkSearchPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
           </Route>
         </Routes>

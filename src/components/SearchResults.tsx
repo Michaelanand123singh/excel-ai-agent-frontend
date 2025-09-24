@@ -25,8 +25,8 @@ interface SearchResultsProps {
     total_matches: number
     part_number: string
     message: string
-    latency_ms: number
-    cached: boolean
+    latency_ms?: number
+    cached?: boolean
     price_summary?: {
       min_price: number
       max_price: number
