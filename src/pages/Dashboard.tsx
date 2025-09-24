@@ -126,7 +126,7 @@ export default function Dashboard() {
         <Card>
           <CardHeader title="Recent Datasets" />
           <CardContent>
-            {allFiles && allFiles.length > 0 ? (
+            {Array.isArray(allFiles) && allFiles.length > 0 ? (
               <div className="space-y-2">
                 {allFiles.slice(0, 5).map((dataset) => (
                   <div 
