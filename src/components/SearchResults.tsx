@@ -90,7 +90,7 @@ export function SearchResults({
 
   const formatPrice = (price: number | string) => {
     if (typeof price === 'number') {
-      return `$${price.toFixed(2)}`
+      return `₹${price.toFixed(2)}`
     }
     return String(price || 'N/A')
   }
@@ -195,12 +195,12 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
           value={results.price_summary && 
                  typeof results.price_summary.min_price === 'number' && 
                  typeof results.price_summary.max_price === 'number' ? 
-            `$${results.price_summary.min_price.toFixed(2)} - $${results.price_summary.max_price.toFixed(2)}` : 
+            `₹${results.price_summary.min_price.toFixed(2)} - ₹${results.price_summary.max_price.toFixed(2)}` : 
             'N/A'
           }
           subtitle={results.price_summary && 
                    typeof results.price_summary.avg_price === 'number' ? 
-            `Avg: $${results.price_summary.avg_price.toFixed(2)}` : 
+            `Avg: ₹${results.price_summary.avg_price.toFixed(2)}` : 
             'No price data'
           }
           icon={

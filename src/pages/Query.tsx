@@ -60,46 +60,64 @@ export default function QueryPage() {
   const [dragActive, setDragActive] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
-    if (!Array.isArray(rows) || rows.length === 0) return
-    const headers = [
-      'company_name',
-      'contact_details',
-      'email',
-      'quantity',
-      'unit_price',
-      'uqc',
-      'part_number',
-      'item_description',
-      'secondary_buyer'
-    ]
-    const escape = (val: unknown) => {
-      if (val === null || val === undefined) return ''
-      const s = String(val)
-      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
-      return s
-    }
-    const lines = [headers.join(',')]
-    for (const row of rows) {
-      const line = headers.map(h => escape(row[h])).join(',')
-      lines.push(line)
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-  }
   const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
   const [debugInfo, setDebugInfo] = useState<string>('')
   const [params] = useSearchParams()
   const { showToast } = useToast()
+  
+  // Check authentication status
+  const checkAuth = useCallback(() => {
+    const token = localStorage.getItem('token');
+    console.log('Auth token status:', token ? 'Present' : 'Missing');
+    if (!token) {
+      showToast('Please log in to use the search functionality', 'error');
+      return false;
+    }
+    return true;
+  }, [showToast]);
+  
+  const runBulkUpload = useCallback(
+    async (f: File) => {
+      if (!checkAuth()) return;
+      if (!fileId) return setError("Please enter a file ID");
+      setBulkUploading(true);
+      setError(undefined);
+      try {
+        console.log('Starting bulk upload with:', { fileId, fileName: f.name, fileSize: f.size });
+        const r = await searchPartNumberBulkUpload(fileId, f);
+        console.log('Bulk upload result:', r);
+        setBulkResults(
+          r.results as unknown as Record<string, PartSearchResult>
+        );
+        const first = Object.keys(r.results || {})[0];
+        if (first) {
+          setPartNumber(first);
+          setPartPage(1);
+          // Set the detailed results for the first part to show in the table
+          const firstResult = r.results[first] as unknown as PartSearchResult;
+          if (firstResult && !(firstResult as any).error) {
+            setPartResults(firstResult);
+          }
+        }
+        showToast(
+          `Searched ${r.total_parts} part numbers from file`,
+          "success"
+        );
+      } catch (err: unknown) {
+        console.error('Bulk upload error:', err);
+        const errorMsg =
+          (err as { response?: { data?: { detail?: string } } })?.response?.data
+            ?.detail || (err as Error)?.message || "Bulk upload failed";
+        setError(errorMsg);
+        showToast(errorMsg, "error");
+      } finally {
+        setBulkUploading(false);
+      }
+    },
+    [fileId, showToast, checkAuth]
+  );
   
   // Drag and drop handlers
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -126,7 +144,7 @@ export default function QueryPage() {
         setError('Please upload an Excel (.xlsx, .xls) or CSV file')
       }
     }
-  }, [fileId, showToast])
+  }, [runBulkUpload])
   
   // Manual search only; no debounce auto-trigger
   
@@ -155,11 +173,13 @@ export default function QueryPage() {
   }, [fileId, q, showToast]);
 
   const searchPart = useCallback(async () => {
+    if (!checkAuth()) return;
     if (!fileId) return setError("Please enter a file ID");
     if (!partNumber) return setError("Please enter a part number");
     setLoading(true);
     setError(undefined);
     try {
+      console.log('Starting single part search with:', { fileId, partNumber, pageSize, showAll, searchMode });
       const r = await searchPartNumber(
         fileId,
         partNumber,
@@ -168,25 +188,27 @@ export default function QueryPage() {
         showAll,
         searchMode
       );
-      setBulkResults({ [partNumber]: r as unknown as PartSearchResult });
-      setSelectedPart(partNumber);
-      setSelectedPage(1);
+      console.log('Single part search result:', r);
+      setPartResults(r as unknown as PartSearchResult);
+      setPartPage(1);
       showToast(
         `Found ${r.total_matches} matches for ${partNumber}`,
         "success"
       );
     } catch (err: unknown) {
+      console.error('Single part search error:', err);
       const errorMsg =
         (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || "Search failed";
+          ?.detail || (err as Error)?.message || "Search failed";
       setError(errorMsg);
       showToast(errorMsg, "error");
     } finally {
       setLoading(false);
     }
-  }, [fileId, partNumber, pageSize, showAll, searchMode, showToast]);
+  }, [fileId, partNumber, pageSize, showAll, searchMode, showToast, checkAuth]);
 
   const runBulkTextSearch = useCallback(async () => {
+    if (!checkAuth()) return;
     if (!fileId) return setError("Please enter a file ID");
     const parts = bulkInput
       .split(/[\n,]/g)
@@ -198,6 +220,7 @@ export default function QueryPage() {
     setLoading(true);
     setError(undefined);
     try {
+      console.log('Starting bulk search with:', { fileId, parts: parts.slice(0, 5), pageSize, showAll, searchMode });
       const r = await searchPartNumberBulk(
         fileId,
         parts,
@@ -206,55 +229,30 @@ export default function QueryPage() {
         showAll,
         searchMode
       );
+      console.log('Bulk search result:', r);
       setBulkResults(r.results as unknown as Record<string, PartSearchResult>);
       const first = Object.keys(r.results || {})[0];
       if (first) {
-        setSelectedPart(first);
-        setSelectedPage(1);
+        setPartNumber(first);
+        setPartPage(1);
+        // Set the detailed results for the first part to show in the table
+        const firstResult = r.results[first] as unknown as PartSearchResult;
+        if (firstResult && !(firstResult as any).error) {
+          setPartResults(firstResult);
+        }
       }
       showToast(`Searched ${r.total_parts} part numbers`, "success");
     } catch (err: unknown) {
+      console.error('Bulk search error:', err);
       const errorMsg =
         (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail || "Bulk search failed";
+          ?.detail || (err as Error)?.message || "Bulk search failed";
       setError(errorMsg);
       showToast(errorMsg, "error");
     } finally {
       setLoading(false);
     }
-  }, [fileId, bulkInput, pageSize, showAll, searchMode, showToast]);
-
-  const runBulkUpload = useCallback(
-    async (f: File) => {
-      if (!fileId) return setError("Please enter a file ID");
-      setBulkUploading(true);
-      setError(undefined);
-      try {
-        const r = await searchPartNumberBulkUpload(fileId, f);
-        setBulkResults(
-          r.results as unknown as Record<string, PartSearchResult>
-        );
-        const first = Object.keys(r.results || {})[0];
-        if (first) {
-          setSelectedPart(first);
-          setSelectedPage(1);
-        }
-        showToast(
-          `Searched ${r.total_parts} part numbers from file`,
-          "success"
-        );
-      } catch (err: unknown) {
-        const errorMsg =
-          (err as { response?: { data?: { detail?: string } } })?.response?.data
-            ?.detail || "Bulk upload failed";
-        setError(errorMsg);
-        showToast(errorMsg, "error");
-      } finally {
-        setBulkUploading(false);
-      }
-    },
-    [fileId, showToast]
-  );
+  }, [fileId, bulkInput, pageSize, showAll, searchMode, showToast, checkAuth]);
 
   async function testSearch() {
     if (!fileId) return setError("Please enter a file ID");
@@ -384,13 +382,13 @@ export default function QueryPage() {
   loading={loading}
   onCopyAnswer={() => {
     if (res?.answer) {
-      navigator.clipboard.writeText(res.answer);
+      navigator.clipboard.writeText(res.answer as string);
       showToast('Answer copied!', 'success');
     }
   }}
   onCopySQL={() => {
     if (res?.sql?.query) {
-      navigator.clipboard.writeText(res.sql.query);
+      navigator.clipboard.writeText((res.sql as any).query);
       showToast('SQL copied!', 'success');
     }
   }}
@@ -520,7 +518,7 @@ export default function QueryPage() {
                   <CardContent>
                     <div className="mb-4 flex justify-between items-center">
                       <div className="text-sm text-gray-600">
-                        Found results for {Object.values(bulkResults).filter(r => r && !r.error && r.total_matches > 0).length} out of {Object.keys(bulkResults).length} parts
+                        Found results for {Object.values(bulkResults).filter(r => r && !(r as any).error && (r as any).total_matches > 0).length} out of {Object.keys(bulkResults).length} parts
                       </div>
                       <Button 
                         variant="secondary" 
@@ -533,44 +531,65 @@ export default function QueryPage() {
                     <div className="space-y-4">
                       {Object.keys(bulkResults).map((pn) => {
                         const r = bulkResults[pn];
+                        const isError = (r as any)?.error;
+                        const totalMatches = isError ? 0 : (r as any)?.total_matches || 0;
+                        const searchMode = isError ? "error" : (r as any)?.search_mode || "hybrid";
+                        const matchType = isError ? "error" : (r as any)?.match_type || "n/a";
+                        const companies = isError ? [] : (r as any)?.companies || [];
+                        
                         return (
                           <div
                             key={pn}
                             className={`p-3 border rounded ${
-                              selectedPart === pn
+                              partNumber === pn
                                 ? "bg-blue-50 border-blue-200"
+                                : isError
+                                ? "bg-red-50 border-red-200"
                                 : ""
                             }`}
                           >
                             <div className="flex items-center justify-between">
                               <div className="font-medium">
-                                {pn} — {r?.total_matches || 0} matches{" "}
+                                {pn} — {totalMatches} matches{" "}
                                 <span className="text-xs text-gray-500">
-                                  [{r?.search_mode || "hybrid"}:
-                                  {r?.match_type || "n/a"}]
+                                  [{searchMode}:{matchType}]
                                 </span>
+                                {isError && (
+                                  <span className="text-xs text-red-500 ml-2">
+                                    Error: {(r as any).error}
+                                  </span>
+                                )}
                               </div>
                               <div className="flex gap-2">
-                                <Button
-                                  variant="secondary"
-                                  onClick={() => {
-                                    setSelectedPart(pn);
-                                    setSelectedPage(1);
-                                  }}
-                                >
-                                  View details
-                                </Button>
-                                <Button
-                                  variant="secondary"
-                                  onClick={() =>
-                                    exportCompaniesToCSV(
-                                      r?.companies || [],
-                                      `part_${pn}.csv`
-                                    )
-                                  }
-                                >
-                                  Export CSV
-                                </Button>
+                                {!isError && (
+                                  <>
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() => {
+                                        setPartNumber(pn);
+                                        setPartPage(1);
+                                        // Set the detailed results for this part to show in the table
+                                        const partResult = bulkResults[pn] as unknown as PartSearchResult;
+                                        if (partResult && !(partResult as any).error) {
+                                          setPartResults(partResult);
+                                        }
+                                      }}
+                                    >
+                                      View details
+                                    </Button>
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() =>
+                                        exportCompaniesToCSV(
+                                          companies,
+                                          `part_${pn}.csv`
+                                        )
+                                      }
+                                    >
+                                      Export CSV
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -581,67 +600,61 @@ export default function QueryPage() {
                 </Card>
               )}
               {/* --- Selected Part Results --- */}
-              {selectedPart && selectedPaged && (
+              {partNumber && partResults && (
                 <SearchResults
-                  results={selectedPaged as any}
+                  results={partResults as any}
                   loading={loading}
                   onExportCSV={() =>
                     exportCompaniesToCSV(
-                      selectedPaged.companies as any,
-                      `part_search_${selectedPart}.csv`
+                      partResults.companies as any,
+                      `part_search_${partNumber}.csv`
                     )
                   }
                   onPageChange={async (page: number) => {
-                    setSelectedPage(page);
-                    if (fileId && selectedPart) {
+                    setPartPage(page);
+                    if (fileId && partNumber) {
                       const r = await searchPartNumber(
                         fileId,
-                        selectedPart,
+                        partNumber,
                         page,
                         pageSize,
                         showAll,
                         searchMode
                       );
-                      setBulkResults((prev) =>
-                        prev ? { ...prev, [selectedPart]: r as any } : prev
-                      );
+                      setPartResults(r as any);
                     }
                   }}
                   onPageSizeChange={async (size) => {
                     setPageSize(size);
-                    setSelectedPage(1);
-                    if (fileId && selectedPart) {
+                    setPartPage(1);
+                    if (fileId && partNumber) {
                       const r = await searchPartNumber(
                         fileId,
-                        selectedPart,
+                        partNumber,
                         1,
                         size,
                         showAll,
                         searchMode
                       );
-                      setBulkResults((prev) =>
-                        prev ? { ...prev, [selectedPart]: r as any } : prev
-                      );
+                      setPartResults(r as any);
                     }
                   }}
                   onShowAllChange={async (all) => {
                     setShowAll(all);
-                    setSelectedPage(1);
-                    if (fileId && selectedPart) {
+                    setPartPage(1);
+                    if (fileId && partNumber) {
                       const r = await searchPartNumber(
                         fileId,
-                        selectedPart,
+                        partNumber,
                         1,
                         pageSize,
                         all,
                         searchMode
                       );
-                      setBulkResults((prev) =>
-                        prev ? { ...prev, [selectedPart]: r as any } : prev
-                      );
+                      setPartResults(r as any);
                     }
                   }}
-                  currentPage={selectedPage}
+                  currentPage={partPage}
                   pageSize={pageSize}
                   showAll={showAll}
                 />
