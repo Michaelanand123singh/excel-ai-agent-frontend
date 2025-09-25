@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { ChartBarIcon, CloudArrowUpIcon, CommandLineIcon, HomeIcon, DocumentIcon, XMarkIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline'
+import { ChartBarIcon, CloudArrowUpIcon, CommandLineIcon, HomeIcon, DocumentIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { useDatasets } from '../../store/datasets'
 
 export default function Sidebar({ variant = 'static', open = false, onClose }: { variant?: 'static' | 'drawer'; open?: boolean; onClose?: () => void }) {

@@ -5,7 +5,7 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload, searchPartNumberBulkUltraFast } from '../lib/api'
+import { queryDataset, searchPartNumber, searchPartNumberBulkUpload, searchPartNumberBulkUltraFast } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 // removed auto-search debounce
@@ -45,12 +45,16 @@ export default function QueryPage() {
     match_type?: string
     error?: string
   }
+  type ErrorResult = { error: string }
+  type BulkEntry = PartSearchResult | ErrorResult
+  type QueryResponse = { answer?: string; sql?: { query?: string } } | undefined
+
   const [fileId, setFileId] = useState<number>(0)
   const [q, setQ] = useState('count rows')
-  const [res, setRes] = useState<Record<string, unknown>>()
+  const [res, setRes] = useState<QueryResponse>()
   const [partNumber, setPartNumber] = useState('')
   const [bulkInput, setBulkInput] = useState('')
-  const [bulkResults, setBulkResults] = useState<Record<string, PartSearchResult> | null>(null)
+  const [bulkResults, setBulkResults] = useState<Record<string, BulkEntry> | null>(null)
   const [bulkUploading, setBulkUploading] = useState(false)
   const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
   const [partPage, setPartPage] = useState(1)
@@ -64,6 +68,10 @@ export default function QueryPage() {
   const [error, setError] = useState<string>()
   const [params] = useSearchParams()
   const { showToast } = useToast()
+
+  function isErrorResult(x: BulkEntry): x is ErrorResult {
+    return (x as Record<string, unknown>).error !== undefined
+  }
   
   // Check authentication status
   const checkAuth = useCallback(() => {
@@ -83,12 +91,10 @@ export default function QueryPage() {
       setError(undefined);
       // Clear single search area when starting bulk upload
       setPartNumber('');
-      setPartResults(null);
+      setPartResults(undefined);
       try {
         const r = await searchPartNumberBulkUpload(fileId, f);
-        setBulkResults(
-          r.results as unknown as Record<string, PartSearchResult>
-        );
+        setBulkResults(r.results as unknown as Record<string, BulkEntry>);
         // Don't automatically populate single search area - let user choose which part to view
         showToast(
           `Searched ${r.total_parts} part numbers from file`,
@@ -121,7 +127,7 @@ export default function QueryPage() {
     setError(undefined);
     try {
       const r = await queryDataset(fileId, q);
-      setRes(r);
+      setRes(r as QueryResponse);
       showToast("Query executed successfully!", "success");
     } catch (err: unknown) {
       const errorMsg =
@@ -180,7 +186,7 @@ export default function QueryPage() {
     setError(undefined);
     // Clear single search area when starting bulk search
     setPartNumber('');
-    setPartResults(null);
+    setPartResults(undefined);
     try {
       const r = await searchPartNumberBulkUltraFast(
         fileId,
@@ -190,7 +196,7 @@ export default function QueryPage() {
         showAll,
         searchMode
       );
-      setBulkResults(r.results as unknown as Record<string, PartSearchResult>);
+      setBulkResults(r.results as unknown as Record<string, BulkEntry>);
       // Don't automatically populate single search area - let user choose which part to view
       showToast(`Searched ${r.total_parts} part numbers`, "success");
     } catch (err: unknown) {
@@ -320,7 +326,7 @@ export default function QueryPage() {
   }}
   onCopySQL={() => {
     if (res?.sql?.query) {
-      navigator.clipboard.writeText((res.sql as any).query);
+      navigator.clipboard.writeText(res.sql.query as string);
       showToast('SQL copied!', 'success');
     }
   }}
@@ -386,7 +392,7 @@ export default function QueryPage() {
                         <select
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           value={searchMode}
-                          onChange={(e) => setSearchMode(e.target.value as any)}
+                          onChange={(e) => setSearchMode(e.target.value as 'exact' | 'fuzzy' | 'hybrid')}
                           disabled={loading}
                         >
                           <option value="exact">Exact Match</option>
@@ -424,7 +430,7 @@ export default function QueryPage() {
                       
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                          <label className="block text sm font-medium text-gray-700 mb-2">
                             Part Numbers (comma or newline separated)
                           </label>
                           <textarea
@@ -484,7 +490,7 @@ export default function QueryPage() {
                         <div>
                           <h2 className="text-xl font-semibold text-gray-900">Bulk Search Results</h2>
                           <p className="text-sm text-gray-600 mt-1">
-                            {Object.keys(bulkResults).length} parts searched • {Object.values(bulkResults).filter(r => r && !(r as any).error && (r as any).total_matches > 0).length} with results
+                            {Object.keys(bulkResults).length} parts searched • {Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length} with results
                           </p>
                         </div>
                       </div>
@@ -500,12 +506,12 @@ export default function QueryPage() {
                   <CardContent className="p-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {Object.keys(bulkResults).map((pn) => {
-                        const r = bulkResults[pn];
-                        const isError = (r as any)?.error;
-                        const totalMatches = isError ? 0 : (r as any)?.total_matches || 0;
-                        const searchMode = isError ? "error" : (r as any)?.search_mode || "hybrid";
-                        const matchType = isError ? "error" : (r as any)?.match_type || "n/a";
-                        const companies = isError ? [] : (r as any)?.companies || [];
+                        const entry = bulkResults[pn]
+                        const isError = isErrorResult(entry)
+                        const totalMatches = isError ? 0 : (entry.total_matches || 0)
+                        const searchModeVal = isError ? 'error' : (entry.search_mode || 'hybrid')
+                        const matchTypeVal = isError ? 'error' : (entry.match_type || 'n/a')
+                        const companies: Company[] = isError ? [] : (entry.companies || [])
                         
                         return (
                           <div
@@ -535,12 +541,12 @@ export default function QueryPage() {
                                       {totalMatches} matches
                                     </span>
                                     <span className="text-xs text-gray-500">
-                                      {searchMode}:{matchType}
+                                      {searchModeVal}:{matchTypeVal}
                                     </span>
                                   </div>
                                   {isError && (
-                                    <p className="text-xs text-red-600 mt-1 truncate" title={(r as any).error}>
-                                      Error: {(r as any).error}
+                                    <p className="text-xs text-red-600 mt-1 truncate">
+                                      Error: {entry.error}
                                     </p>
                                   )}
                                 </div>
@@ -552,11 +558,7 @@ export default function QueryPage() {
                                     onClick={() => {
                                       setPartNumber(pn);
                                       setPartPage(1);
-                                      // Set the detailed results for this part to show in the table
-                                      const partResult = bulkResults[pn] as unknown as PartSearchResult;
-                                      if (partResult && !(partResult as any).error) {
-                                        setPartResults(partResult);
-                                      }
+                                      setPartResults(entry);
                                     }}
                                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-3"
                                   >
@@ -587,11 +589,26 @@ export default function QueryPage() {
               {/* --- Selected Part Results --- */}
               {partNumber && partResults && (
                 <SearchResults
-                  results={partResults as any}
+                  results={{
+                    companies: partResults.companies,
+                    total_matches: partResults.total_matches,
+                    part_number: partResults.part_number,
+                    message: partResults.message || '',
+                    latency_ms: partResults.latency_ms,
+                    cached: partResults.cached,
+                    price_summary: partResults.price_summary
+                      ? {
+                          min_price: partResults.price_summary.min_price,
+                          max_price: partResults.price_summary.max_price,
+                          total_quantity: partResults.price_summary.total_quantity,
+                          avg_price: partResults.price_summary.avg_price ?? 0,
+                        }
+                      : undefined,
+                  }}
                   loading={loading}
                   onExportCSV={() =>
                     exportCompaniesToCSV(
-                      partResults.companies as any,
+                      partResults.companies,
                       `part_search_${partNumber}.csv`
                     )
                   }
@@ -606,7 +623,7 @@ export default function QueryPage() {
                         showAll,
                         searchMode
                       );
-                      setPartResults(r as any);
+                      setPartResults(r as unknown as PartSearchResult);
                     }
                   }}
                   onPageSizeChange={async (size) => {
@@ -621,7 +638,7 @@ export default function QueryPage() {
                         showAll,
                         searchMode
                       );
-                      setPartResults(r as any);
+                      setPartResults(r as unknown as PartSearchResult);
                     }
                   }}
                   onShowAllChange={async (all) => {
@@ -636,7 +653,7 @@ export default function QueryPage() {
                         all,
                         searchMode
                       );
-                      setPartResults(r as any);
+                      setPartResults(r as unknown as PartSearchResult);
                     }
                   }}
                   currentPage={partPage}
