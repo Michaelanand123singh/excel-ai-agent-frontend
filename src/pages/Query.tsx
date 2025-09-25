@@ -57,7 +57,6 @@ export default function QueryPage() {
   const [pageSize, setPageSize] = useState(50)
   const [showAll, setShowAll] = useState(false)
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
-  const [dragActive, setDragActive] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
@@ -114,32 +113,6 @@ export default function QueryPage() {
     [fileId, showToast, checkAuth]
   );
   
-  // Drag and drop handlers
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true)
-    } else if (e.type === "dragleave") {
-      setDragActive(false)
-    }
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-    
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0]
-      if (droppedFile.name.toLowerCase().match(/\.(xlsx|xls|csv)$/)) {
-        runBulkUpload(droppedFile)
-        setError(undefined)
-      } else {
-        setError('Please upload an Excel (.xlsx, .xls) or CSV file')
-      }
-    }
-  }, [runBulkUpload])
   
   // Manual search only; no debounce auto-trigger
   
@@ -314,8 +287,8 @@ export default function QueryPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-2 space-y-4">
+      <div className="w-full">
+        <div className="space-y-4">
           {activeTab === "query" ? (
             <>
               <Card>
@@ -504,33 +477,6 @@ export default function QueryPage() {
                           />
                         </div>
                       
-                        {/* Drag and Drop Zone */}
-                        <div 
-                          className={`mt-6 border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 ${
-                            dragActive 
-                              ? 'border-blue-400 bg-blue-50 scale-105' 
-                              : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'
-                          }`}
-                          onDragEnter={handleDrag}
-                          onDragLeave={handleDrag}
-                          onDragOver={handleDrag}
-                          onDrop={handleDrop}
-                        >
-                          <div className="text-gray-500">
-                            <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
-                              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                              </svg>
-                            </div>
-                            <h4 className="text-lg font-medium text-gray-700 mb-2">Drop your file here</h4>
-                            <p className="text-sm text-gray-500 mb-1">
-                              Drag and drop an Excel or CSV file here
-                            </p>
-                            <p className="text-xs text-gray-400">
-                              Supports .xlsx, .xls, and .csv files up to 50MB
-                            </p>
-                          </div>
-                        </div>
                       </div>
                     </div>
                   </div>
