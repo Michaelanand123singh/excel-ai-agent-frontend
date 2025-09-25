@@ -10,6 +10,7 @@ import { useToast } from '../hooks/useToast'
 
 export default function UploadPage() {
   const fileInput = useRef<HTMLInputElement>(null)
+  const uploadAbortRef = useRef<AbortController | null>(null)
   const [fileId, setFileId] = useState<number>()
   const [progress, setProgress] = useState<string>('-')
   const [connecting, setConnecting] = useState(false)
@@ -28,10 +29,13 @@ export default function UploadPage() {
     }
     
     setUploading(true)
+    uploadAbortRef.current = new AbortController()
     setError(undefined)
     try {
-      const meta = await uploadFile(f)
+      const meta = await uploadFile(f, uploadAbortRef.current.signal)
       setFileId(meta.id)
+      // persist tracking so we can resume progress if user navigates away
+      try { localStorage.setItem('upload_tracking_file_id', String(meta.id)) } catch {}
       // Cast minimal upload response into Dataset shape for local state
       const ds: Dataset = {
         id: meta.id,
@@ -50,6 +54,7 @@ export default function UploadPage() {
       showToast(errorMsg, 'error')
     } finally {
       setUploading(false)
+      uploadAbortRef.current = null
     }
   }
 
@@ -91,6 +96,7 @@ export default function UploadPage() {
           // Auto-redirect when processing is complete
           if (data.type === 'processing_complete') {
             setRedirecting(true)
+            try { localStorage.removeItem('upload_tracking_file_id') } catch {}
             setTimeout(() => navigate(`/query?fileId=${id}`), 1500)
           }
         }
@@ -144,6 +150,35 @@ export default function UploadPage() {
     }
   }, [])
 
+  // On mount, resume tracking if a file id was stored earlier
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('upload_tracking_file_id')
+      const id = saved ? parseInt(saved) : undefined
+      if (id && !Number.isNaN(id)) {
+        setFileId(id)
+        setProgress('resuming...')
+        connectWs(id)
+      }
+    } catch {}
+  }, [])
+
+  // Prevent accidental navigation while upload request is in-flight to avoid browser aborting the request
+  useEffect(() => {
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      if (uploading) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    if (uploading) {
+      window.addEventListener('beforeunload', beforeUnload as EventListener)
+    }
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload as EventListener)
+    }
+  }, [uploading])
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Upload Dataset</h1>
@@ -164,6 +199,21 @@ export default function UploadPage() {
             >
               {uploading ? <Spinner size={16} /> : 'Upload'}
             </Button>
+            {uploading && (
+              <Button 
+                variant="secondary"
+                onClick={() => {
+                  try {
+                    uploadAbortRef.current?.abort()
+                    setUploading(false)
+                    setProgress('upload cancelled')
+                    showToast('Upload cancelled', 'success')
+                  } catch {}
+                }}
+              >
+                Cancel Upload
+              </Button>
+            )}
             <Button 
               variant="secondary" 
               onClick={handleTestUpload}

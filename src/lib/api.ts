@@ -23,7 +23,7 @@ const getApiBaseUrl = () => {
 };
 
 const API_BASE = getApiBaseUrl();
-const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 30000;
+const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 120000; // 2 minutes for bulk searches
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
 console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
@@ -176,11 +176,12 @@ export async function login(username: string, password: string) {
   return res.data as { access_token: string; token_type: string }
 }
 
-export async function uploadFile(file: File) {
+export async function uploadFile(file: File, signal?: AbortSignal) {
   const form = new FormData()
   form.append('file', file)
   const res = await api.post('/api/v1/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
   })
   return res.data as { id: number; filename: string; status: string; size_bytes: number }
 }
@@ -235,6 +236,18 @@ export type ApiBulkPartResults = {
 
 export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
   const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
+  return res.data as ApiBulkPartResults
+}
+
+export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  const res = await api.post('/api/v1/query-elasticsearch/search-part-bulk-elasticsearch', {
+    file_id: fileId,
+    part_numbers: partNumbers,
+    page,
+    page_size: pageSize,
+    show_all: showAll,
+    search_mode: searchMode
+  })
   return res.data as ApiBulkPartResults
 }
 

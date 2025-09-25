@@ -5,7 +5,7 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload } from '../lib/api'
+import { queryDataset, searchPartNumber, searchPartNumberBulk, searchPartNumberBulkUpload, searchPartNumberBulkUltraFast } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 // removed auto-search debounce
@@ -81,21 +81,15 @@ export default function QueryPage() {
       if (!fileId) return setError("Please enter a file ID");
       setBulkUploading(true);
       setError(undefined);
+      // Clear single search area when starting bulk upload
+      setPartNumber('');
+      setPartResults(null);
       try {
         const r = await searchPartNumberBulkUpload(fileId, f);
         setBulkResults(
           r.results as unknown as Record<string, PartSearchResult>
         );
-        const first = Object.keys(r.results || {})[0];
-        if (first) {
-          setPartNumber(first);
-          setPartPage(1);
-          // Set the detailed results for the first part to show in the table
-          const firstResult = r.results[first] as unknown as PartSearchResult;
-          if (firstResult && !(firstResult as any).error) {
-            setPartResults(firstResult);
-          }
-        }
+        // Don't automatically populate single search area - let user choose which part to view
         showToast(
           `Searched ${r.total_parts} part numbers from file`,
           "success"
@@ -184,8 +178,11 @@ export default function QueryPage() {
       return setError("Enter at least one part number (min 2 characters)");
     setLoading(true);
     setError(undefined);
+    // Clear single search area when starting bulk search
+    setPartNumber('');
+    setPartResults(null);
     try {
-      const r = await searchPartNumberBulk(
+      const r = await searchPartNumberBulkUltraFast(
         fileId,
         parts,
         1,
@@ -194,16 +191,7 @@ export default function QueryPage() {
         searchMode
       );
       setBulkResults(r.results as unknown as Record<string, PartSearchResult>);
-      const first = Object.keys(r.results || {})[0];
-      if (first) {
-        setPartNumber(first);
-        setPartPage(1);
-        // Set the detailed results for the first part to show in the table
-        const firstResult = r.results[first] as unknown as PartSearchResult;
-        if (firstResult && !(firstResult as any).error) {
-          setPartResults(firstResult);
-        }
-      }
+      // Don't automatically populate single search area - let user choose which part to view
       showToast(`Searched ${r.total_parts} part numbers`, "success");
     } catch (err: unknown) {
       const errorMsg =
