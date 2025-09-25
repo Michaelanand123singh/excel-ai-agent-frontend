@@ -6,7 +6,8 @@ substitutions:
   _SERVICE: excelai-frontend
   _REGION: us-central1
   _PROJECT_ID: opt2deal-472408
-  _API_BASE: https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app/api/v1
+  # IMPORTANT: Provide the backend ROOT URL (no /api or /api/v1 suffix)
+  _API_BASE: https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app
   _CPU: "1"
   _MEM: 256Mi
 
