@@ -18,6 +18,23 @@ const getApiBaseUrl = () => {
     return window.__API_BASE_URL__
   }
 
+  // Runtime override via <meta name="api-base" content="https://backend">
+  if (typeof document !== 'undefined') {
+    const meta = document.querySelector('meta[name="api-base"]') as HTMLMetaElement | null
+    const v = meta?.content?.trim()
+    if (v) return v
+  }
+
+  // Heuristic: if served from a known frontend Cloud Run hostname, derive backend hostname
+  if (typeof window !== 'undefined' && window.location?.host) {
+    const h = window.location.host
+    // Example: excel-ai-agent-frontend-123.run.app -> excel-ai-agent-backends-123.run.app
+    if (/excel-ai-agent-frontend-/.test(h) && h.endsWith('.run.app')) {
+      const backendHost = h.replace('excel-ai-agent-frontend-', 'excel-ai-agent-backends-')
+      return `https://${backendHost}`
+    }
+  }
+
   // Production heuristic: use current origin if available
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin
