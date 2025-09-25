@@ -13,13 +13,23 @@ const getApiBaseUrl = () => {
     return import.meta.env.VITE_API_BASE_URL;
   }
 
+  // Runtime override via global (useful for static hosting like Cloud Run/NGINX)
+  if (typeof window !== 'undefined' && typeof window.__API_BASE_URL__ === 'string' && window.__API_BASE_URL__.trim()) {
+    return window.__API_BASE_URL__
+  }
+
+  // Production heuristic: use current origin if available
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+
   // Development mode fallback
   if (import.meta.env.MODE === 'development') {
     return 'http://localhost:8000';
   }
 
-  // If env var is missing in production, throw an error instead of silently falling back
-  throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env file');
+  // Final fallback
+  return 'http://localhost:8000'
 };
 
 const API_BASE = getApiBaseUrl();
