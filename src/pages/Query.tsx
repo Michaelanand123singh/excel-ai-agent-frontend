@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -53,6 +53,8 @@ export default function QueryPage() {
   const [pageSize, setPageSize] = useState(50)
   const [showAll, setShowAll] = useState(false)
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
+  const [dragActive, setDragActive] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   function exportCompaniesToCSV(rows: Record<string, unknown>[], filename = 'part_search_export.csv') {
     if (!Array.isArray(rows) || rows.length === 0) return
@@ -94,6 +96,33 @@ export default function QueryPage() {
   const [debugInfo, setDebugInfo] = useState<string>('')
   const [params] = useSearchParams()
   const { showToast } = useToast()
+  
+  // Drag and drop handlers
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true)
+    } else if (e.type === "dragleave") {
+      setDragActive(false)
+    }
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0]
+      if (droppedFile.name.toLowerCase().match(/\.(xlsx|xls|csv)$/)) {
+        runBulkUpload(droppedFile)
+        setError(undefined)
+      } else {
+        setError('Please upload an Excel (.xlsx, .xls) or CSV file')
+      }
+    }
+  }, [fileId, showToast])
   
   // Manual search only; no debounce auto-trigger
   
@@ -362,17 +391,47 @@ export default function QueryPage() {
                         <Button onClick={runBulkTextSearch} disabled={loading}>
                           {loading ? <Spinner size={16} /> : 'Run Bulk Search'}
                         </Button>
-                        <label className="inline-flex items-center gap-2 cursor-pointer">
-                          <input 
-                            type="file" 
-                            accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
-                            onChange={e => {
-                              const f = e.target.files?.[0]
-                              if (f) runBulkUpload(f)
-                            }}
-                            disabled={bulkUploading}
-                          />
-                        </label>
+                        <Button 
+                          variant="secondary" 
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={bulkUploading}
+                        >
+                          {bulkUploading ? <Spinner size={16} /> : '📁 Upload File'}
+                        </Button>
+                        <input 
+                          ref={fileInputRef}
+                          type="file" 
+                          accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                          onChange={e => {
+                            const f = e.target.files?.[0]
+                            if (f) runBulkUpload(f)
+                          }}
+                          disabled={bulkUploading}
+                          className="hidden"
+                        />
+                      </div>
+                      
+                      {/* Drag and Drop Zone */}
+                      <div 
+                        className={`mt-4 border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                          dragActive 
+                            ? 'border-blue-400 bg-blue-50' 
+                            : 'border-gray-300 hover:border-gray-400'
+                        }`}
+                        onDragEnter={handleDrag}
+                        onDragLeave={handleDrag}
+                        onDragOver={handleDrag}
+                        onDrop={handleDrop}
+                      >
+                        <div className="text-gray-500">
+                          <div className="text-lg mb-2">📁</div>
+                          <p className="text-sm">
+                            Drag and drop an Excel or CSV file here, or click "Upload File" above
+                          </p>
+                          <p className="text-xs mt-1 text-gray-400">
+                            Supports .xlsx, .xls, and .csv files
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -431,8 +490,23 @@ export default function QueryPage() {
 
               {bulkResults && (
                 <Card>
-                  <CardHeader title="Bulk Results" description="Grouped by part number" />
+                  <CardHeader 
+                    title="Bulk Results" 
+                    description={`Grouped by part number - ${Object.keys(bulkResults).length} parts searched`}
+                  />
                   <CardContent>
+                    <div className="mb-4 flex justify-between items-center">
+                      <div className="text-sm text-gray-600">
+                        Found results for {Object.values(bulkResults).filter(r => r && !r.error && r.total_matches > 0).length} out of {Object.keys(bulkResults).length} parts
+                      </div>
+                      <Button 
+                        variant="secondary" 
+                        onClick={() => setBulkResults(null)}
+                        className="text-sm"
+                      >
+                        Clear Results
+                      </Button>
+                    </div>
                     <div className="space-y-4">
                       {Object.keys(bulkResults).map((pn) => {
                         const r = bulkResults[pn]

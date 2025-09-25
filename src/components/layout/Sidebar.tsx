@@ -22,7 +22,6 @@ export default function Sidebar({ variant = 'static', open = false, onClose }: {
         <NavItem to="/upload" icon={<CloudArrowUpIcon className="w-5 h-5" />} label="Upload" />
         <NavItem to="/files" icon={<DocumentIcon className="w-5 h-5" />} label="Files" />
         <NavItem to="/query" icon={<CommandLineIcon className="w-5 h-5" />} label="Query" />
-        <NavItem to="/bulk-search" icon={<MagnifyingGlassIcon className="w-5 h-5" />} label="Bulk Search" />
         <NavItem to="/analytics" icon={<ChartBarIcon className="w-5 h-5" />} label="Analytics" />
       </nav>
       <RecentDatasets />
