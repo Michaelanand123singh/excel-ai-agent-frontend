@@ -41,12 +41,13 @@ function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label
 
 function RecentDatasets() {
   const { files } = useDatasets()
-  if (!files.length) return null
+  const safeFiles = Array.isArray(files) ? files : []
+  if (!safeFiles.length) return null
   return (
     <div className="p-3">
       <div className="text-xs font-medium text-gray-500 mb-2">Recent</div>
       <div className="space-y-1">
-        {files.slice(0, 5).map(d => (
+        {safeFiles.slice(0, 5).map(d => (
           <NavLink key={d.id} to={`/query?fileId=${d.id}`} className="block text-xs text-gray-700 hover:text-blue-700 truncate">
             {d.filename}
           </NavLink>

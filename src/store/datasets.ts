@@ -38,11 +38,13 @@ export const useDatasets = create<DatasetsState>((set, get) => ({
     }
     set({ isLoading: true, error: undefined })
     try {
-      const files = await listFiles()
+      const resp = await listFiles()
+      const files = Array.isArray(resp) ? resp : []
       set({ files, isLoading: false })
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } }
       set({ 
-        error: error.response?.data?.detail || 'Failed to load files',
+        error: err.response?.data?.detail || 'Failed to load files',
         isLoading: false 
       })
     }

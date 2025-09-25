@@ -14,16 +14,25 @@ import axios from 'axios'
 //   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
 // };
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://excel-ai-agent-backends-765930447632.asia-southeast1.run.app";
 
-console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL);
-console.log('Final API_BASE_URL:', API_BASE);
-console.log('Full API URL:', `${API_BASE}/api`);
+console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
+console.log('Final API_BASE_URL:', API_BASE)
+console.log('Full API URL:', `${API_BASE}/api`)
 
 export const api = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
 })
+
+export function setRuntimeApiBase(url?: string) {
+  if (typeof window === 'undefined') return
+  if (url && url.trim()) {
+    window.__API_BASE_URL__ = url.trim()
+    api.defaults.baseURL = url.trim()
+    console.info('Runtime API base updated to:', url.trim())
+  }
+}
 
 // Developer console logging for API calls and duplicate detection
 type ApiMeta = { requestId: string; startedAtMs: number }
@@ -121,7 +130,6 @@ api.interceptors.response.use(
     console.info('Request', { headers: cfg?.headers, params: cfg?.params, data: cfg?.data })
     console.groupEnd()
 
-    // Retry with exponential backoff on network/timeout (up to 2 retries)
     const isTimeout = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '')
     const isNetwork = !error.response
     const status = error.response?.status
@@ -136,7 +144,6 @@ api.interceptors.response.use(
       return new Promise((resolve) => setTimeout(resolve, delay)).then(() => api(cfgWithRetry))
     }
 
-    // 401 handling: set cooldown to prevent flooding
     if (status === 401) {
       lastAuthErrorAt = Date.now()
     }
