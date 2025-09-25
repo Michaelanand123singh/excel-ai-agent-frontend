@@ -1,28 +1,39 @@
 import axios from 'axios'
-// const getApiBaseUrl = () => {
-//   // Prefer environment variable
-//   if (import.meta.env.VITE_API_BASE_URL) {
-//     return import.meta.env.VITE_API_BASE_URL;
-//   }
 
-//   // Development mode fallback
-//   if (import.meta.env.MODE === 'development') {
-//     return 'http://localhost:5173';
-//   }
+// Extend Window interface for runtime API base URL
+declare global {
+  interface Window {
+    __API_BASE_URL__?: string;
+  }
+}
 
-//   // If env var is missing in production, throw an error instead of silently falling back
-//   throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env.production');
-// };
+const getApiBaseUrl = () => {
+  // Prefer environment variable
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
 
-const API_BASE = "http://localhost:8000";
+  // Development mode fallback
+  if (import.meta.env.MODE === 'development') {
+    return 'http://localhost:8000';
+  }
+
+  // If env var is missing in production, throw an error instead of silently falling back
+  throw new Error('❌ Missing VITE_API_BASE_URL. Please set it in your .env file');
+};
+
+const API_BASE = getApiBaseUrl();
+const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 30000;
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
+console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
 console.log('Final API_BASE_URL:', API_BASE)
+console.log('Final API_TIMEOUT:', API_TIMEOUT)
 console.log('Full API URL:', `${API_BASE}/api`)
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: API_TIMEOUT,
 })
 
 export function setRuntimeApiBase(url?: string) {
