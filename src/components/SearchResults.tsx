@@ -17,6 +17,9 @@ interface Company {
   uqc: string
   item_description: string
   part_number?: string
+  secondary_buyer?: string
+  secondary_buyer_contact?: string
+  secondary_buyer_email?: string
 }
 
 interface SearchResultsProps {
@@ -57,9 +60,45 @@ export function SearchResults({
 }: SearchResultsProps) {
   const [sortField, setSortField] = useState<keyof Company | null>(null)
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [sortByMatch, setSortByMatch] = useState<'none' | 'asc' | 'desc'>('none')
+
+  // Match percentage helpers
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const jaccardSimilarity = (a: string, b: string) => {
+    if (!a || !b) return 0
+    const setA = new Set(a)
+    const setB = new Set(b)
+    let inter = 0
+    setA.forEach(ch => { if (setB.has(ch)) inter += 1 })
+    const union = setA.size + setB.size - inter
+    if (union === 0) return 0
+    return inter / union
+  }
+  const computeMatchPercent = (targetPart: string, company: Company) => {
+    const t = normalize(String(targetPart || ''))
+    if (!t) return 0
+    const pn = normalize(String(company.part_number || ''))
+    if (pn) {
+      if (pn === t) return 100
+      const sim = jaccardSimilarity(pn, t)
+      return Math.round(sim * 100)
+    }
+    const desc = normalize(String(company.item_description || ''))
+    if (desc.includes(t)) return 80
+    const simDesc = jaccardSimilarity(desc, t)
+    return Math.round(simDesc * 100 * 0.8)
+  }
 
   const sortedCompanies = useMemo(() => {
     const base: Company[] = Array.isArray(results?.companies) ? results!.companies : []
+    if (sortByMatch !== 'none' && results?.part_number) {
+      const target = results.part_number
+      return [...base].sort((a, b) => {
+        const am = computeMatchPercent(target, a)
+        const bm = computeMatchPercent(target, b)
+        return sortByMatch === 'asc' ? am - bm : bm - am
+      })
+    }
     if (!sortField) return base
 
     return [...base].sort((a, b) => {
@@ -77,7 +116,7 @@ export function SearchResults({
         ? aStr.localeCompare(bStr)
         : bStr.localeCompare(aStr)
     })
-  }, [results, sortField, sortDirection])
+  }, [results, sortField, sortDirection, sortByMatch])
 
   const handleSort = (field: keyof Company) => {
     if (sortField === field) {
@@ -85,6 +124,7 @@ export function SearchResults({
     } else {
       setSortField(field)
       setSortDirection('asc')
+      setSortByMatch('none')
     }
   }
 
@@ -120,7 +160,7 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                 <CardSkeleton key={i} />
               ))}
             </div>
-            <TableSkeleton rows={5} columns={7} />
+            <TableSkeleton rows={5} columns={9} />
           </div>
         </CardContent>
       </Card>
@@ -295,10 +335,21 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
           </div>
 
           {/* Table */}
-          <div className="overflow-hidden">
+          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead 
+                    className="cursor-pointer hover:bg-gray-100 sticky left-0 bg-white z-10"
+                    onClick={() => setSortByMatch(sortByMatch === 'desc' ? 'asc' : 'desc')}
+                  >
+                    <div className="flex items-center gap-1">
+                      Match %
+                      {sortByMatch !== 'none' && (
+                        <span>{sortByMatch === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </div>
+                  </TableHead>
                   <TableHead 
                     className="cursor-pointer hover:bg-gray-100"
                     onClick={() => handleSort('company_name')}
@@ -376,6 +427,11 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                       )}
                     </div>
                   </TableHead>
+                  <TableHead>
+                    <div className="flex items-center gap-1">
+                      Secondary Buyer
+                    </div>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -383,6 +439,16 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                   .slice(startIndex, endIndex)
                   .map((company, index) => (
                     <TableRow key={index} className="hover:bg-gray-50">
+                      <TableCell className="font-mono text-sm sticky left-0 bg-white z-10">
+                        {results?.part_number ? (
+                          <span className={(() => {
+                            const pct = computeMatchPercent(results.part_number, company)
+                            return pct >= 95 ? 'text-green-600' : pct >= 70 ? 'text-emerald-600' : pct >= 40 ? 'text-yellow-600' : 'text-gray-500'
+                          })()}>
+                            {computeMatchPercent(results.part_number, company)}%
+                          </span>
+                        ) : '—'}
+                      </TableCell>
                       <TableCell className="font-medium">
                         <div className="max-w-xs truncate" title={company.company_name}>
                           {company.company_name || 'N/A'}
@@ -413,6 +479,17 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                         <div className="max-w-xs truncate text-gray-600" title={company.item_description}>
                           {company.item_description || 'N/A'}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {company.secondary_buyer ? (
+                          <div className="max-w-xs">
+                            <div className="font-medium truncate" title={company.secondary_buyer}>{company.secondary_buyer}</div>
+                            <div className="text-xs text-gray-500 truncate" title={company.secondary_buyer_contact || ''}>{company.secondary_buyer_contact || ''}</div>
+                            <div className="text-xs text-gray-500 truncate" title={company.secondary_buyer_email || ''}>{company.secondary_buyer_email || ''}</div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400">N/A</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
