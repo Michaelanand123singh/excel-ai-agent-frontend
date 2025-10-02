@@ -5,9 +5,10 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulkUpload, searchPartNumberBulkUltraFast } from '../lib/api'
+import { queryDataset, searchPartNumber, searchPartNumberBulkUltraFast, searchBulkExcelUpload } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
+import * as XLSX from 'xlsx'
 // removed auto-search debounce
 
 export default function QueryPage() {
@@ -93,12 +94,61 @@ export default function QueryPage() {
       setPartNumber('');
       setPartResults(undefined);
       try {
-        const r = await searchPartNumberBulkUpload(fileId, f);
-        setBulkResults(r.results as unknown as Record<string, BulkEntry>);
-        // Don't automatically populate single search area - let user choose which part to view
+        // Prefer richer bulk-excel endpoint which understands headers and quantities
+        const r = await searchBulkExcelUpload(fileId, f);
+
+        // Transform backend response to existing bulkResults shape (Record<string, BulkEntry>)
+        const transformed: Record<string, BulkEntry> = {};
+        for (const item of r.results || []) {
+          const userPn = (item.user_data?.part_number || '').trim();
+          const sr = item.search_result;
+          if (!userPn) continue;
+
+          if (!sr || sr.match_status === 'not_found') {
+            transformed[userPn] = {
+              error: 'No matches found'
+            } as ErrorResult;
+            continue;
+          }
+
+          // Build companies array from database_record if available
+          const rec = sr.database_record || {};
+          const company = {
+            company_name: rec.company_name || 'N/A',
+            contact_details: rec.contact_details || 'N/A',
+            email: rec.email || 'N/A',
+            quantity: typeof rec.quantity === 'number' ? rec.quantity : 0,
+            unit_price: typeof (sr.price_calculation?.unit_price) === 'number' ? sr.price_calculation!.unit_price : (typeof rec.unit_price === 'number' ? rec.unit_price : 0),
+            uqc: rec.uqc || 'N/A',
+            item_description: rec.item_description || item.user_data?.part_name || 'N/A',
+            part_number: rec.part_number || userPn,
+            secondary_buyer: undefined,
+            secondary_buyer_contact: undefined,
+            secondary_buyer_email: undefined,
+          } as Company;
+
+          transformed[userPn] = {
+            companies: [company],
+            total_matches: 1,
+            part_number: userPn,
+            message: sr.match_status === 'partial' ? 'Partial match' : 'Match found',
+            latency_ms: sr.search_time_ms || undefined,
+            cached: false,
+            price_summary: {
+              min_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
+              max_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
+              total_quantity: typeof company.quantity === 'number' ? company.quantity : 0,
+              avg_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
+            },
+            search_mode: 'hybrid',
+            match_type: sr.match_type || 'bulk_excel',
+          } as PartSearchResult;
+        }
+
+        setBulkResults(transformed);
         showToast(
-          `Searched ${r.total_parts} part numbers from file`,
-          "success"
+          `Processed ${r.upload_summary?.total_parts || Object.keys(transformed).length} parts from file`,
+          'success'
         );
       } catch (err: unknown) {
         const errorMsg =
@@ -250,6 +300,80 @@ export default function QueryPage() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  }
+
+  function exportAllBulkResultsToExcel() {
+    if (!bulkResults || Object.keys(bulkResults).length === 0) {
+      showToast("No bulk search results to export", "error");
+      return;
+    }
+
+    // Prepare data for Excel export
+    const allCompanies: (Company & { searched_part_number: string })[] = [];
+    
+    Object.entries(bulkResults).forEach(([partNumber, entry]) => {
+      if (!isErrorResult(entry) && entry.companies && entry.companies.length > 0) {
+        entry.companies.forEach(company => {
+          allCompanies.push({
+            ...company,
+            searched_part_number: partNumber,
+            part_number: company.part_number || partNumber
+          });
+        });
+      }
+    });
+
+    if (allCompanies.length === 0) {
+      showToast("No company data found in bulk search results", "error");
+      return;
+    }
+
+    // Create workbook and worksheet
+    const wb = XLSX.utils.book_new();
+    
+    // Prepare headers with searched part number first
+    const headers = [
+      "searched_part_number",
+      "company_name", 
+      "contact_details",
+      "email",
+      "quantity",
+      "unit_price",
+      "uqc",
+      "item_description",
+      "part_number",
+      "secondary_buyer",
+      "secondary_buyer_contact", 
+      "secondary_buyer_email"
+    ];
+
+    // Convert data to worksheet format
+    const wsData = [
+      headers, // Header row
+      ...allCompanies.map(company => 
+        headers.map(header => company[header as keyof typeof company] || "")
+      )
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    
+    // Auto-size columns
+    const colWidths = headers.map(header => ({
+      wch: Math.max(header.length, 15) // Minimum width of 15 characters
+    }));
+    ws['!cols'] = colWidths;
+
+    // Add worksheet to workbook
+    XLSX.utils.book_append_sheet(wb, ws, "Bulk Search Results");
+
+    // Generate filename with timestamp
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '_');
+    const filename = `bulk_search_results_${timestamp}.xlsx`;
+
+    // Save file
+    XLSX.writeFile(wb, filename);
+    
+    showToast(`Exported ${allCompanies.length} companies from ${Object.keys(bulkResults).length} part numbers to Excel`, "success");
   }
 
   // --- JSX ---
@@ -494,17 +618,25 @@ export default function QueryPage() {
                           </p>
                         </div>
                       </div>
-                      <Button 
-                        variant="secondary" 
-                        onClick={() => setBulkResults(null)}
-                        className="text-sm border border-gray-300 text-gray-700 hover:bg-gray-50"
-                      >
-                        Clear Results
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button 
+                          onClick={exportAllBulkResultsToExcel}
+                          className="bg-green-600 hover:bg-green-700 text-white font-medium px-4 py-2"
+                        >
+                          📊 Export All to Excel
+                        </Button>
+                        <Button 
+                          variant="secondary" 
+                          onClick={() => setBulkResults(null)}
+                          className="text-sm border border-gray-300 text-gray-700 hover:bg-gray-50"
+                        >
+                          Clear Results
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="space-y-6">
                       {Object.keys(bulkResults).map((pn) => {
                         const entry = bulkResults[pn]
                         const isError = isErrorResult(entry)
@@ -516,18 +648,17 @@ export default function QueryPage() {
                         return (
                           <div
                             key={pn}
-                            className={`p-4 border rounded-lg transition-all duration-200 ${
-                              partNumber === pn
-                                ? "bg-blue-50 border-blue-300 shadow-md"
-                                : isError
+                            className={`border rounded-lg transition-all duration-200 ${
+                              isError
                                 ? "bg-red-50 border-red-200"
-                                : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"
+                                : "bg-white border-gray-200 shadow-sm"
                             }`}
                           >
-                            <div className="space-y-3">
-                              <div className="flex items-start justify-between">
+                            {/* Part Number Header */}
+                            <div className="p-4 border-b bg-gray-50">
+                              <div className="flex items-center justify-between">
                                 <div className="flex-1">
-                                  <h4 className="font-semibold text-gray-900 text-sm truncate" title={pn}>
+                                  <h4 className="font-semibold text-gray-900 text-lg" title={pn}>
                                     {pn}
                                   </h4>
                                   <div className="flex items-center gap-2 mt-1">
@@ -545,25 +676,12 @@ export default function QueryPage() {
                                     </span>
                                   </div>
                                   {isError && (
-                                    <p className="text-xs text-red-600 mt-1 truncate">
+                                    <p className="text-sm text-red-600 mt-1">
                                       Error: {entry.error}
                                     </p>
                                   )}
                                 </div>
-                              </div>
-                              
-                              {!isError && totalMatches > 0 && (
-                                <div className="flex gap-2">
-                                  <Button
-                                    onClick={() => {
-                                      setPartNumber(pn);
-                                      setPartPage(1);
-                                      setPartResults(entry);
-                                    }}
-                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-1.5 px-3"
-                                  >
-                                    View Details
-                                  </Button>
+                                {!isError && totalMatches > 0 && (
                                   <Button
                                     variant="secondary"
                                     onClick={() =>
@@ -572,13 +690,82 @@ export default function QueryPage() {
                                         `part_${pn}.csv`
                                       )
                                     }
-                                    className="text-xs border border-gray-300 text-gray-700 hover:bg-gray-50 py-1.5 px-3"
+                                    className="text-sm border border-gray-300 text-gray-700 hover:bg-gray-50 px-3 py-1.5"
                                   >
-                                    Export
+                                    📊 Export CSV
                                   </Button>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </div>
+                            
+                            {/* Company Results */}
+                            {!isError && totalMatches > 0 && (
+                              <div className="p-4">
+                                {companies.length > 0 ? (
+                                  <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                      <thead className="bg-gray-50">
+                                        <tr>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Price</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">UQC</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="bg-white divide-y divide-gray-200">
+                                        {companies.slice(0, 5).map((company, index) => (
+                                          <tr key={index} className="hover:bg-gray-50">
+                                            <td className="px-3 py-2 text-sm font-medium text-gray-900">
+                                              <div className="max-w-xs truncate" title={company.company_name}>
+                                                {company.company_name || 'N/A'}
+                                              </div>
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-500">
+                                              <div className="max-w-xs truncate" title={company.contact_details}>
+                                                {company.contact_details || 'N/A'}
+                                              </div>
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-500">
+                                              <div className="max-w-xs truncate" title={company.email}>
+                                                {company.email || 'N/A'}
+                                              </div>
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-900 text-right font-mono">
+                                              {typeof company.quantity === 'number' ? company.quantity.toLocaleString() : (company.quantity || 'N/A')}
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-900 text-right font-mono">
+                                              {typeof company.unit_price === 'number' ? `₹${company.unit_price.toFixed(2)}` : (company.unit_price || 'N/A')}
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-500">
+                                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                                {company.uqc || 'N/A'}
+                                              </span>
+                                            </td>
+                                            <td className="px-3 py-2 text-sm text-gray-500">
+                                              <div className="max-w-xs truncate" title={company.item_description}>
+                                                {company.item_description || 'N/A'}
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    {companies.length > 5 && (
+                                      <div className="mt-3 text-sm text-gray-500 text-center">
+                                        Showing first 5 of {companies.length} companies. Export to see all results.
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-center py-4 text-gray-500">
+                                    No company data available for this part number.
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
