@@ -232,6 +232,18 @@ export type ApiCompany = {
   uqc: string
   item_description: string
   part_number?: string
+  secondary_buyer?: string
+  secondary_buyer_contact?: string
+  secondary_buyer_email?: string
+  confidence?: number
+  match_type?: string
+  match_status?: string
+  confidence_breakdown?: {
+    part_number: { score: number; method: string; details: string }
+    description: { score: number; method: string; details: string }
+    manufacturer: { score: number; method: string; details: string }
+    length_penalty: number
+  }
 }
 
 export type ApiPartSearchResult = {

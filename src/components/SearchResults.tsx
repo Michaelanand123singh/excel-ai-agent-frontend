@@ -20,6 +20,15 @@ interface Company {
   secondary_buyer?: string
   secondary_buyer_contact?: string
   secondary_buyer_email?: string
+  confidence?: number
+  match_type?: string
+  match_status?: string
+  confidence_breakdown?: {
+    part_number: { score: number; method: string; details: string }
+    description: { score: number; method: string; details: string }
+    manufacturer: { score: number; method: string; details: string }
+    length_penalty: number
+  }
 }
 
 interface SearchResultsProps {
@@ -58,44 +67,25 @@ export function SearchResults({
   pageSize,
   showAll
 }: SearchResultsProps) {
+  
+  // Debug logging
+  console.log('SearchResults received data:', {
+    part_number: results?.part_number,
+    companies_count: results?.companies?.length,
+    first_company: results?.companies?.[0]
+  })
   const [sortField, setSortField] = useState<keyof Company | null>(null)
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const [sortByMatch, setSortByMatch] = useState<'none' | 'asc' | 'desc'>('none')
 
-  // Match percentage helpers
-  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-  const jaccardSimilarity = (a: string, b: string) => {
-    if (!a || !b) return 0
-    const setA = new Set(a)
-    const setB = new Set(b)
-    let inter = 0
-    setA.forEach(ch => { if (setB.has(ch)) inter += 1 })
-    const union = setA.size + setB.size - inter
-    if (union === 0) return 0
-    return inter / union
-  }
-  const computeMatchPercent = (targetPart: string, company: Company) => {
-    const t = normalize(String(targetPart || ''))
-    if (!t) return 0
-    const pn = normalize(String(company.part_number || ''))
-    if (pn) {
-      if (pn === t) return 100
-      const sim = jaccardSimilarity(pn, t)
-      return Math.round(sim * 100)
-    }
-    const desc = normalize(String(company.item_description || ''))
-    if (desc.includes(t)) return 80
-    const simDesc = jaccardSimilarity(desc, t)
-    return Math.round(simDesc * 100 * 0.8)
-  }
+  // Backend confidence scores are now used instead of frontend calculation
 
   const sortedCompanies = useMemo(() => {
     const base: Company[] = Array.isArray(results?.companies) ? results!.companies : []
-    if (sortByMatch !== 'none' && results?.part_number) {
-      const target = results.part_number
+    if (sortByMatch !== 'none') {
       return [...base].sort((a, b) => {
-        const am = computeMatchPercent(target, a)
-        const bm = computeMatchPercent(target, b)
+        const am = a.confidence || 0
+        const bm = b.confidence || 0
         return sortByMatch === 'asc' ? am - bm : bm - am
       })
     }
@@ -440,14 +430,24 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                   .map((company, index) => (
                     <TableRow key={index} className="hover:bg-gray-50">
                       <TableCell className="font-mono text-sm sticky left-0 bg-white z-10">
-                        {results?.part_number ? (
-                          <span className={(() => {
-                            const pct = computeMatchPercent(results.part_number, company)
-                            return pct >= 95 ? 'text-green-600' : pct >= 70 ? 'text-emerald-600' : pct >= 40 ? 'text-yellow-600' : 'text-gray-500'
-                          })()}>
-                            {computeMatchPercent(results.part_number, company)}%
+                        {company.confidence !== undefined ? (
+                          <span 
+                            className={(() => {
+                              const pct = company.confidence
+                              return pct >= 95 ? 'text-green-600' : pct >= 70 ? 'text-emerald-600' : pct >= 40 ? 'text-yellow-600' : 'text-gray-500'
+                            })()}
+                            title={company.confidence_breakdown ? 
+                              `Part: ${company.confidence_breakdown.part_number.score.toFixed(1)}% (${company.confidence_breakdown.part_number.method})\n` +
+                              `Desc: ${company.confidence_breakdown.description.score.toFixed(1)}% (${company.confidence_breakdown.description.method})\n` +
+                              `Mfg: ${company.confidence_breakdown.manufacturer.score.toFixed(1)}% (${company.confidence_breakdown.manufacturer.method})` 
+                              : undefined
+                            }
+                          >
+                            {company.confidence.toFixed(1)}%
                           </span>
-                        ) : '—'}
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="font-medium">
                         <div className="max-w-xs truncate" title={company.company_name}>

@@ -24,6 +24,15 @@ export default function QueryPage() {
     secondary_buyer?: string;
     secondary_buyer_contact?: string;
     secondary_buyer_email?: string;
+    confidence?: number;
+    match_type?: string;
+    match_status?: string;
+    confidence_breakdown?: {
+      part_number: { score: number; method: string; details: string };
+      description: { score: number; method: string; details: string };
+      manufacturer: { score: number; method: string; details: string };
+      length_penalty: number;
+    };
   };
 
   type PartSearchResult = {
@@ -710,6 +719,7 @@ export default function QueryPage() {
                                     <table className="min-w-full divide-y divide-gray-200">
                                       <thead className="bg-gray-50">
                                         <tr>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50">Match %</th>
                                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
                                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
@@ -723,6 +733,26 @@ export default function QueryPage() {
                                       <tbody className="bg-white divide-y divide-gray-200">
                                         {companies.slice(0, 5).map((company, index) => (
                                           <tr key={index} className="hover:bg-gray-50">
+                                            <td className="px-3 py-2 text-sm font-mono text-gray-900 sticky left-0 bg-white z-10">
+                                              {company.confidence !== undefined ? (
+                                                <span 
+                                                  className={(() => {
+                                                    const pct = company.confidence
+                                                    return pct >= 95 ? 'text-green-600' : pct >= 70 ? 'text-emerald-600' : pct >= 40 ? 'text-yellow-600' : 'text-gray-500'
+                                                  })()}
+                                                  title={company.confidence_breakdown ? 
+                                                    `Part: ${company.confidence_breakdown.part_number.score.toFixed(1)}% (${company.confidence_breakdown.part_number.method})\n` +
+                                                    `Desc: ${company.confidence_breakdown.description.score.toFixed(1)}% (${company.confidence_breakdown.description.method})\n` +
+                                                    `Mfg: ${company.confidence_breakdown.manufacturer.score.toFixed(1)}% (${company.confidence_breakdown.manufacturer.method})` 
+                                                    : undefined
+                                                  }
+                                                >
+                                                  {company.confidence.toFixed(1)}%
+                                                </span>
+                                              ) : (
+                                                <span className="text-gray-400">—</span>
+                                              )}
+                                            </td>
                                             <td className="px-3 py-2 text-sm font-medium text-gray-900">
                                               <div className="max-w-xs truncate" title={company.company_name}>
                                                 {company.company_name || 'N/A'}
