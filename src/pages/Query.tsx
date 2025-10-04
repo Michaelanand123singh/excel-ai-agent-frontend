@@ -108,52 +108,31 @@ export default function QueryPage() {
         // Prefer richer bulk-excel endpoint which understands headers and quantities
         const r = await searchBulkExcelUpload(fileId, f);
 
-        // Transform backend response to existing bulkResults shape (Record<string, BulkEntry>)
+        // Backend now returns the same format as text-based search (Record<string, BulkEntry>)
+        // Transform the unified response format to match the expected BulkEntry structure
         const transformed: Record<string, BulkEntry> = {};
-        for (const item of r.results || []) {
-          const userPn = (item.user_data?.part_number || '').trim();
-          const sr = item.search_result;
-          if (!userPn) continue;
-
-          if (!sr || sr.match_status === 'not_found') {
-            transformed[userPn] = {
-              error: 'No matches found'
+        
+        for (const [partNumber, result] of Object.entries(r.results || {})) {
+          if ('error' in result) {
+            // Handle error case
+            transformed[partNumber] = {
+              error: result.error
             } as ErrorResult;
             continue;
           }
 
-          // Build companies array from database_record if available
-          const rec = sr.database_record || {};
-          const company = {
-            company_name: rec.company_name || 'N/A',
-            contact_details: rec.contact_details || 'N/A',
-            email: rec.email || 'N/A',
-            quantity: typeof rec.quantity === 'number' ? rec.quantity : 0,
-            unit_price: typeof (sr.price_calculation?.unit_price) === 'number' ? sr.price_calculation!.unit_price : (typeof rec.unit_price === 'number' ? rec.unit_price : 0),
-            uqc: rec.uqc || 'N/A',
-            item_description: rec.item_description || item.user_data?.part_name || 'N/A',
-            part_number: rec.part_number || userPn,
-            secondary_buyer: undefined,
-            secondary_buyer_contact: undefined,
-            secondary_buyer_email: undefined,
-          } as Company;
-
-          transformed[userPn] = {
-            companies: [company],
-            total_matches: 1,
-            part_number: userPn,
-            message: sr.match_status === 'partial' ? 'Partial match' : 'Match found',
-            latency_ms: sr.search_time_ms || undefined,
+          // Handle success case - result is ApiPartSearchResult format
+          const companies = result.companies || [];
+          transformed[partNumber] = {
+            companies: companies,
+            total_matches: result.total_matches || 0,
+            part_number: partNumber,
+            message: result.total_matches > 0 ? 'Match found' : 'No matches',
+            latency_ms: result.latency_ms,
             cached: false,
-            price_summary: {
-              min_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
-              max_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
-              total_quantity: typeof company.quantity === 'number' ? company.quantity : 0,
-              avg_price: typeof company.unit_price === 'number' ? company.unit_price : 0,
-            },
-            search_mode: 'hybrid',
-            match_type: sr.match_type || 'bulk_excel',
-          } as PartSearchResult;
+            search_mode: result.search_mode || 'hybrid',
+            match_type: result.match_type || 'unknown'
+          } as BulkEntry;
         }
 
         setBulkResults(transformed);

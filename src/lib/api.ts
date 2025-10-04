@@ -309,47 +309,14 @@ export async function searchBulkExcelUpload(fileId: number, file: File) {
   form.append('file', file)
   form.append('file_id', String(fileId))
   const res = await api.post('/api/v1/bulk-search/bulk-excel-search', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-  return res.data as {
+  return res.data as ApiBulkPartResults & {
     upload_summary: {
       total_parts: number
       found_matches: number
       partial_matches: number
       no_matches: number
-      processing_time_ms: number
       parse_errors: string[]
     }
-    results: Array<{
-      user_data: {
-        part_number: string
-        part_name: string
-        quantity: number
-        manufacturer_name: string
-        row_index: number
-      }
-      search_result: {
-        match_status: 'found' | 'partial' | 'not_found'
-        match_type: string
-        confidence: number
-        database_record?: {
-          company_name?: string
-          contact_details?: string
-          email?: string
-          quantity?: number
-          unit_price?: number
-          item_description?: string
-          part_number?: string
-          uqc?: string
-        }
-        price_calculation?: {
-          unit_price?: number
-          total_cost?: number
-          available_quantity?: number
-        }
-        search_time_ms?: number
-      }
-      processing_errors?: string[]
-    }>
-    file_info: { filename: string; file_size_bytes: number; search_mode: string }
   }
 }
 
