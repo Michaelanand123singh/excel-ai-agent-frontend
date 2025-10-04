@@ -53,21 +53,6 @@ export default function LoginPage() {
     }
   }
 
-  const handleDemoLogin = async () => {
-    setEmail('info@opt2deal.com')
-    setPassword('Opt2deal123')
-    setIsLoading(true)
-    try {
-      await login('info@opt2deal.com', 'Opt2deal123')
-      showToast('Login successful! Redirecting...', 'success')
-      navigate('/dashboard')
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.detail || 'Login failed'
-      showToast(errorMsg, 'error')
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -80,7 +65,7 @@ export default function LoginPage() {
         <Card>
           <CardHeader 
             title="Welcome Back" 
-            description="Enter your credentials to access the system"
+            description="Please sign in with your account credentials"
           />
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -123,36 +108,16 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6">
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-300" />
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white text-gray-500">Or use default credentials</span>
-                </div>
-              </div>
-
-              <Button
-                variant="secondary"
-                onClick={handleDemoLogin}
-                disabled={isLoading}
-                className="w-full mt-4"
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                className="text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                onClick={() => showToast('Please contact your administrator for password reset', 'info')}
               >
-                {isLoading ? <Spinner size={16} /> : 'Quick Login'}
-              </Button>
+                Forgot your password?
+              </button>
             </div>
 
-            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <h3 className="text-sm font-medium text-blue-800 mb-2">System Credentials:</h3>
-              <div className="text-xs text-blue-700 space-y-1">
-                <div><strong>Email:</strong> info@opt2deal.com</div>
-                <div><strong>Password:</strong> Opt2deal123</div>
-                <div className="text-blue-600 mt-2">
-                  Use the credentials above or click "Quick Login" to auto-fill them.
-                </div>
-              </div>
-            </div>
           </CardContent>
         </Card>
 

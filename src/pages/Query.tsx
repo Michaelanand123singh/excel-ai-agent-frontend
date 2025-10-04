@@ -56,6 +56,7 @@ export default function QueryPage() {
   const [partNumber, setPartNumber] = useState('')
   const [bulkInput, setBulkInput] = useState('')
   const [bulkResults, setBulkResults] = useState<Record<string, BulkEntry> | null>(null)
+  
   const [bulkUploading, setBulkUploading] = useState(false)
   const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
   const [partPage, setPartPage] = useState(1)
@@ -83,6 +84,7 @@ export default function QueryPage() {
     }
     return true;
   }, [showToast]);
+  
   
   const runBulkUpload = useCallback(
     async (f: File) => {
@@ -582,6 +584,14 @@ export default function QueryPage() {
                           >
                             {bulkUploading ? <Spinner size={16} /> : '📁 Upload Excel File'}
                           </Button>
+                          {bulkResults && Object.keys(bulkResults).length > 0 && (
+                            <Button 
+                              onClick={exportAllBulkResultsToExcel}
+                              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5"
+                            >
+                              📊 Export All to Excel
+                            </Button>
+                          )}
                           <input 
                             ref={fileInputRef}
                             type="file" 
@@ -619,12 +629,6 @@ export default function QueryPage() {
                         </div>
                       </div>
                       <div className="flex gap-2 self-start sm:self-auto">
-                        <Button 
-                          onClick={exportAllBulkResultsToExcel}
-                          className="bg-green-600 hover:bg-green-700 text-white font-medium px-4 py-2"
-                        >
-                          📊 Export All to Excel
-                        </Button>
                         <Button 
                           variant="secondary" 
                           onClick={() => setBulkResults(null)}
