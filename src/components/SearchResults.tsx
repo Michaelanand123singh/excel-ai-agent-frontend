@@ -39,12 +39,16 @@ interface SearchResultsProps {
     message: string
     latency_ms?: number
     cached?: boolean
+    search_engine?: string
     price_summary?: {
       min_price: number
       max_price: number
       total_quantity: number
       avg_price: number
     }
+    page?: number
+    page_size?: number
+    total_pages?: number
   } | undefined
   loading: boolean
   onExportCSV: () => void
@@ -134,7 +138,8 @@ export function SearchResults({
 
 
 
-const totalPages = Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
+// Use backend pagination info if available, otherwise calculate frontend pagination
+const totalPages = results?.total_pages || Math.ceil((results?.total_matches ?? 0) / pageSize) || 1
 const startIndex = (currentPage - 1) * pageSize
 const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
 
@@ -290,9 +295,13 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                   value={pageSize} 
                   onChange={(e) => onPageSizeChange(parseInt(e.target.value))}
                 >
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
                   <option value={100}>100</option>
+                  <option value={500}>500</option>
+                  <option value={1000}>1,000</option>
+                  <option value={5000}>5,000</option>
+                  <option value={10000}>10,000</option>
+                  <option value={50000}>50,000</option>
+                  <option value={100000}>100,000</option>
                 </select>
               </div>
               
@@ -307,21 +316,26 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
               </label>
             </div>
             
-            <div className="flex items-center gap-2">
-              <Badge variant={results?.cached ? 'info' : 'secondary'}>
-                {results?.cached ? '📦 Cached' : '🔄 Live'}
-              </Badge>
-              <Badge variant={(results?.latency_ms || 0) < 1000 ? 'success' : 'warning'}>
-                ⚡ {results?.latency_ms || 0}ms
-              </Badge>
-              <Button 
-                variant="secondary"
-                onClick={onExportCSV}
-                disabled={!results?.companies || results.companies.length === 0}
-              >
-                📊 Export CSV
-              </Button>
-            </div>
+              <div className="flex items-center gap-2">
+                <Badge variant={results?.cached ? 'info' : 'secondary'}>
+                  {results?.cached ? '📦 Cached' : '🔄 Live'}
+                </Badge>
+                <Badge variant={(results?.latency_ms || 0) < 1000 ? 'success' : 'warning'}>
+                  ⚡ {results?.latency_ms || 0}ms
+                </Badge>
+                {results?.search_engine && (
+                  <Badge variant="info">
+                    🔍 {results.search_engine}
+                  </Badge>
+                )}
+                <Button 
+                  variant="secondary"
+                  onClick={onExportCSV}
+                  disabled={!results?.companies || results.companies.length === 0}
+                >
+                  📊 Export CSV
+                </Button>
+              </div>
           </div>
 
           {/* Table */}

@@ -53,6 +53,7 @@ export default function QueryPage() {
     total_pages?: number
     search_mode?: string
     match_type?: string
+    search_engine?: string
     error?: string
   }
   type ErrorResult = { error: string }
@@ -69,7 +70,7 @@ export default function QueryPage() {
   const [bulkUploading, setBulkUploading] = useState(false)
   const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
   const [partPage, setPartPage] = useState(1)
-  const [pageSize, setPageSize] = useState(50)
+  const [pageSize, setPageSize] = useState(1000)
   const [showAll, setShowAll] = useState(false)
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -447,7 +448,7 @@ export default function QueryPage() {
 />
 
             </>
-          ) : (
+          ) : activeTab === "part" ? (
             <>
               {/* --- Part Search UI --- */}
               <Card className="shadow-lg border-0 bg-gradient-to-r from-slate-50 to-gray-50">
@@ -500,7 +501,7 @@ export default function QueryPage() {
                         </Button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       <div className="space-y-3">
                         <label className="block text-sm font-medium text-gray-700">Search Mode</label>
                         <select
@@ -515,6 +516,23 @@ export default function QueryPage() {
                         </select>
                       </div>
                       <div className="space-y-3">
+                        <label className="block text-sm font-medium text-gray-700">Page Size</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={pageSize}
+                          onChange={(e) => setPageSize(parseInt(e.target.value))}
+                          disabled={loading}
+                        >
+                          <option value={100}>100 results</option>
+                          <option value={500}>500 results</option>
+                          <option value={1000}>1,000 results</option>
+                          <option value={5000}>5,000 results</option>
+                          <option value={10000}>10,000 results</option>
+                          <option value={50000}>50,000 results</option>
+                          <option value={100000}>100,000 results</option>
+                        </select>
+                      </div>
+                      <div className="space-y-3">
                         <label className="block text-sm font-medium text-gray-700">Show All Results</label>
                         <div className="flex items-center">
                           <input
@@ -526,7 +544,7 @@ export default function QueryPage() {
                             className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
                           />
                           <label htmlFor="showAll" className="ml-2 text-sm text-gray-700">
-                            Display all matches (may be slower)
+                            Unlimited results with pagination
                           </label>
                         </div>
                       </div>
@@ -710,7 +728,7 @@ export default function QueryPage() {
                                         </tr>
                                       </thead>
                                       <tbody className="bg-white divide-y divide-gray-200">
-                                        {companies.slice(0, 5).map((company, index) => (
+                                        {companies.map((company, index) => (
                                           <tr key={index} className="hover:bg-gray-50">
                                             <td className="px-3 py-2 text-sm font-mono text-gray-900 sticky left-0 bg-white z-10">
                                               {company.confidence !== undefined ? (
@@ -778,9 +796,9 @@ export default function QueryPage() {
                                         ))}
                                       </tbody>
                                     </table>
-                                    {companies.length > 5 && (
+                                    {companies.length > 100 && (
                                       <div className="mt-3 text-sm text-gray-500 text-center">
-                                        Showing first 5 of {companies.length} companies. Export to see all results.
+                                        Showing all {companies.length} companies. Use export for large datasets.
                                       </div>
                                     )}
                                   </div>
@@ -874,7 +892,7 @@ export default function QueryPage() {
                 />
               )}
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

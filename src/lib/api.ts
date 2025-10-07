@@ -259,9 +259,10 @@ export type ApiPartSearchResult = {
   latency_ms?: number
   search_mode?: string
   match_type?: string
+  search_engine?: string
 }
 
-export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
   const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
   return res.data as ApiPartSearchResult
 }
@@ -273,13 +274,13 @@ export type ApiBulkPartResults = {
   file_id: number
 }
 
-export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
   const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
   return res.data as ApiBulkPartResults
 }
 
-export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers: string[], page = 1, pageSize = 50, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
-  const res = await api.post('/api/v1/query-elasticsearch/search-part-bulk-elasticsearch', {
+export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers: string[], page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  const res = await api.post('/api/v1/query/search-part-bulk', {
     file_id: fileId,
     part_numbers: partNumbers,
     page,
@@ -364,5 +365,3 @@ export async function testSearchEndpoint(fileId: number) {
     columns?: Array<{ name: string; type: string }>
   }
 }
-
-
