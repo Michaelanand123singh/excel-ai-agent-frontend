@@ -54,10 +54,8 @@ interface SearchResultsProps {
   onExportCSV: () => void
   onPageChange: (page: number) => void
   onPageSizeChange: (size: number) => void
-  onShowAllChange: (showAll: boolean) => void
   currentPage: number
   pageSize: number
-  showAll: boolean
 }
 
 export function SearchResults({
@@ -66,10 +64,8 @@ export function SearchResults({
   onExportCSV,
   onPageChange,
   onPageSizeChange,
-  onShowAllChange,
   currentPage,
   pageSize,
-  showAll
 }: SearchResultsProps) {
   
   // Debug logging
@@ -305,15 +301,6 @@ const endIndex = Math.min(startIndex + pageSize, results?.total_matches ?? 0)
                 </select>
               </div>
               
-              <label className="flex items-center gap-2">
-                <input 
-                  type="checkbox" 
-                  checked={showAll}
-                  onChange={(e) => onShowAllChange(e.target.checked)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Show all results</span>
-              </label>
             </div>
             
               <div className="flex items-center gap-2">

@@ -170,11 +170,10 @@ export default function UploadPage() {
         setProgress('resuming...')
         connectWs(id)
       } else if (status.status === 'processed') {
-        // File is already processed, redirect to query page
+        // File is already processed, show option to go to query or upload new
         setFileId(id)
-        setProgress('already processed')
-        setRedirecting(true)
-        setTimeout(() => navigate(`/query?fileId=${id}`), 1000)
+        setProgress('already processed - ready for new upload or go to query')
+        showToast('File already processed. You can upload a new file or go to query page.', 'info')
       } else if (status.status === 'failed') {
         // File failed, clear the tracking and allow new uploads
         localStorage.removeItem('upload_tracking_file_id')
@@ -252,28 +251,54 @@ export default function UploadPage() {
               {uploading ? <Spinner size={16} /> : 'Use Sample'}
             </Button>
             {fileId && !uploading && (
-              <Button 
-                variant="outline" 
-                onClick={async () => {
-                  try {
-                    // Try to reset the stuck file on the backend
-                    await resetStuckFile(fileId)
-                    showToast('Reset stuck file on server', 'success')
-                  } catch (error) {
-                    console.warn('Could not reset file on server:', error)
-                  }
-                  
-                  // Clear local state regardless
-                  localStorage.removeItem('upload_tracking_file_id')
-                  setFileId(undefined)
-                  setProgress('ready for upload')
-                  setError(undefined)
-                  showToast('Cleared stuck upload. Ready for new file.', 'success')
-                }}
-                className="text-orange-600 border-orange-300 hover:bg-orange-50"
-              >
-                Clear Stuck Upload
-              </Button>
+              <>
+                <Button 
+                  variant="outline" 
+                  onClick={async () => {
+                    try {
+                      // Try to reset the stuck file on the backend
+                      await resetStuckFile(fileId)
+                      showToast('Reset stuck file on server', 'success')
+                    } catch (error) {
+                      console.warn('Could not reset file on server:', error)
+                    }
+                    
+                    // Clear local state regardless
+                    localStorage.removeItem('upload_tracking_file_id')
+                    setFileId(undefined)
+                    setProgress('ready for upload')
+                    setError(undefined)
+                    showToast('Cleared stuck upload. Ready for new file.', 'success')
+                  }}
+                  className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                >
+                  Clear Stuck Upload
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    navigate(`/query?fileId=${fileId}`)
+                  }}
+                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                >
+                  Go to Query Page
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    localStorage.removeItem('upload_tracking_file_id')
+                    setFileId(undefined)
+                    setProgress('ready for upload')
+                    setError(undefined)
+                    setRedirecting(false)
+                    setConnecting(false)
+                    showToast('Ready for new upload', 'success')
+                  }}
+                  className="text-green-600 border-green-300 hover:bg-green-50"
+                >
+                  Start Fresh
+                </Button>
+              </>
             )}
           </div>
           
