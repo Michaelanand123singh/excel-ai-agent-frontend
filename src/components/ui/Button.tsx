@@ -1,6 +1,6 @@
 import React from 'react'
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
 
 export function Button({
   children,
@@ -15,6 +15,7 @@ export function Button({
     secondary: 'bg-gray-200 text-gray-900 hover:bg-gray-300 focus:ring-gray-400',
     ghost: 'bg-transparent text-gray-700 hover:bg-gray-100 focus:ring-gray-300',
     danger: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-600',
+    outline: 'border border-gray-300 bg-transparent text-gray-700 hover:bg-gray-50 focus:ring-gray-300',
   }
   return (
     <button className={`${base} ${variants[variant]} ${className || ''} px-4 py-2`} disabled={disabled} {...props}>
