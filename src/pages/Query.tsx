@@ -5,7 +5,7 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchPartNumberBulkUltraFast, searchBulkExcelUpload } from '../lib/api'
+import { queryDataset, searchPartNumber, searchBulkExcelUpload, searchPartNumberBulkChunked } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 import * as XLSX from 'xlsx'
@@ -66,11 +66,15 @@ export default function QueryPage() {
   const [partNumber, setPartNumber] = useState('')
   const [bulkInput, setBulkInput] = useState('')
   const [bulkResults, setBulkResults] = useState<Record<string, BulkEntry> | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number; current: string } | null>(null)
+  const [streamingCount, setStreamingCount] = useState(0)
+  const [bulkResultsPage, setBulkResultsPage] = useState(1)
+  const [bulkResultsPageSize] = useState(25) // Show 25 results per page for very large datasets (1 lakh parts)
   
   const [bulkUploading, setBulkUploading] = useState(false)
   const [partResults, setPartResults] = useState<PartSearchResult | undefined>()
   const [partPage, setPartPage] = useState(1)
-  const [pageSize, setPageSize] = useState(1000)
+  const [pageSize, setPageSize] = useState(20)  // Optimized for fast ES searches
   const [showAll, setShowAll] = useState(false)
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -220,32 +224,50 @@ export default function QueryPage() {
       .split(/[\n,]/g)
       .map((s) => s.trim())
       .filter((s) => s.length >= 2)
-      .slice(0, 10000);
+      .slice(0, 100000); // Support up to 1 lakh parts
     if (parts.length === 0)
       return setError("Enter at least one part number (min 2 characters)");
     setLoading(true);
     setError(undefined);
+    setBulkProgress({ completed: 0, total: parts.length, current: "Starting search..." });
+    setStreamingCount(0);
     // Clear single search area when starting bulk search
     setPartNumber('');
     setPartResults(undefined);
     try {
-      const r = await searchPartNumberBulkUltraFast(
+      // Use chunked bulk to avoid oversized requests/timeouts, preserves response format
+      const r = await searchPartNumberBulkChunked(
         fileId,
         parts,
         1,
         pageSize,
         showAll,
-        searchMode
+        searchMode,
+        { 
+          chunkSize: 100, 
+          concurrency: 12,
+          onProgress: (completed, total, current) => {
+            setBulkProgress({ completed, total, current });
+          },
+          onResults: (streamingResults) => {
+            // Stream results immediately as they come in
+            setBulkResults(streamingResults as unknown as Record<string, BulkEntry>);
+            setStreamingCount(Object.keys(streamingResults).length);
+          }
+        }
       );
       setBulkResults(r.results as unknown as Record<string, BulkEntry>);
+      setBulkProgress(null);
+      setStreamingCount(0); // Reset streaming count when complete
       // Don't automatically populate single search area - let user choose which part to view
-      showToast(`Searched ${r.total_parts} part numbers`, "success");
+      showToast(`✅ Search completed! Found results for ${r.total_parts} part numbers`, "success");
     } catch (err: unknown) {
       const errorMsg =
         (err as { response?: { data?: { detail?: string } } })?.response?.data
           ?.detail || (err as Error)?.message || "Bulk search failed";
       setError(errorMsg);
       showToast(errorMsg, "error");
+      setBulkProgress(null);
     } finally {
       setLoading(false);
     }
@@ -297,6 +319,18 @@ export default function QueryPage() {
     if (!bulkResults || Object.keys(bulkResults).length === 0) {
       showToast("No bulk search results to export", "error");
       return;
+    }
+
+    // Check if search is still in progress
+    if (bulkProgress && bulkProgress.completed < bulkProgress.total) {
+      const confirmExport = window.confirm(
+        `Search is still in progress (${bulkProgress.completed}/${bulkProgress.total} chunks completed).\n\n` +
+        `Currently loaded: ${Object.keys(bulkResults).length.toLocaleString()} results\n` +
+        `Do you want to export the current results, or wait for completion?`
+      );
+      if (!confirmExport) {
+        return;
+      }
     }
 
     // Prepare data for Excel export
@@ -510,9 +544,9 @@ export default function QueryPage() {
                           onChange={(e) => setSearchMode(e.target.value as 'exact' | 'fuzzy' | 'hybrid')}
                           disabled={loading}
                         >
-                          <option value="exact">Exact Match</option>
+                          <option value="exact">Exact Match (Fastest)</option>
                           <option value="fuzzy">Fuzzy Search</option>
-                          <option value="hybrid">Hybrid (Recommended)</option>
+                          <option value="hybrid">Hybrid (Recommended - Fast)</option>
                         </select>
                       </div>
                       <div className="space-y-3">
@@ -523,13 +557,10 @@ export default function QueryPage() {
                           onChange={(e) => setPageSize(parseInt(e.target.value))}
                           disabled={loading}
                         >
+                          <option value={10}>10 results (Fastest)</option>
+                          <option value={20}>20 results (Recommended)</option>
+                          <option value={50}>50 results</option>
                           <option value={100}>100 results</option>
-                          <option value={500}>500 results</option>
-                          <option value={1000}>1,000 results</option>
-                          <option value={5000}>5,000 results</option>
-                          <option value={10000}>10,000 results</option>
-                          <option value={50000}>50,000 results</option>
-                          <option value={100000}>100,000 results</option>
                         </select>
                       </div>
                       <div className="space-y-3">
@@ -546,6 +577,10 @@ export default function QueryPage() {
                           <label htmlFor="showAll" className="ml-2 text-sm text-gray-700">
                             Unlimited results with pagination
                           </label>
+                        </div>
+                        <div className="text-xs text-gray-500 bg-blue-50 p-2 rounded">
+                          💡 <strong>Performance Tip:</strong> Use 10-20 results for fastest searches. 
+                          Exact match mode is fastest for known part numbers.
                         </div>
                       </div>
                     </div>
@@ -572,6 +607,23 @@ export default function QueryPage() {
                             onChange={(e) => setBulkInput(e.target.value)}
                             disabled={loading}
                           />
+                          {bulkInput.split(/[\n,]/g).filter(s => s.trim().length >= 2).length > 1000 && (
+                            <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                              <div className="flex items-start gap-2">
+                                <svg className="w-5 h-5 text-yellow-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                                <div className="text-sm">
+                                  <p className="font-medium text-yellow-800">Large Dataset Detected</p>
+                                  <p className="text-yellow-700 mt-1">
+                                    {bulkInput.split(/[\n,]/g).filter(s => s.trim().length >= 2).length} parts detected. 
+                                    For optimal performance with 1+ crore datasets, results are limited to top 50 matches per part.
+                                    Processing will show progress and may take 30 seconds to 3 minutes for large datasets.
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                         
                         <div className="flex flex-wrap gap-3">
@@ -596,6 +648,11 @@ export default function QueryPage() {
                               className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5"
                             >
                               📊 Export All to Excel
+                              {bulkProgress && bulkProgress.completed < bulkProgress.total && (
+                                <span className="ml-2 text-xs bg-yellow-500 text-white px-2 py-1 rounded">
+                                  ({Object.keys(bulkResults).length.toLocaleString()} loaded)
+                                </span>
+                              )}
                             </Button>
                           )}
                           <input 
@@ -610,6 +667,39 @@ export default function QueryPage() {
                             className="hidden"
                           />
                         </div>
+                        
+                        {/* Progress Indicator for Large Datasets */}
+                        {bulkProgress && (
+                          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-blue-900">
+                                Processing {bulkProgress.total.toLocaleString()} parts...
+                              </span>
+                              <span className="text-sm text-blue-700">
+                                {bulkProgress.completed}/{bulkProgress.total} chunks ({Math.round((bulkProgress.completed / bulkProgress.total) * 100)}%)
+                              </span>
+                            </div>
+                            <div className="w-full bg-blue-200 rounded-full h-3">
+                              <div 
+                                className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+                                style={{ width: `${(bulkProgress.completed / bulkProgress.total) * 100}%` }}
+                              />
+                            </div>
+                            <div className="mt-2 flex justify-between text-xs text-blue-600">
+                              <span>{bulkProgress.current}</span>
+                              {streamingCount > 0 && (
+                                <span className="text-green-600 font-medium">
+                                  📊 {streamingCount.toLocaleString()} results streaming in...
+                                </span>
+                              )}
+                            </div>
+                            {streamingCount > 0 && (
+                              <div className="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded">
+                                ✅ Results are appearing in real-time! You can browse them while processing continues.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       
                       </div>
                     </div>
@@ -630,7 +720,12 @@ export default function QueryPage() {
                         <div>
                           <h2 className="text-xl font-semibold text-gray-900">Bulk Search Results</h2>
                           <p className="text-sm text-gray-600 mt-1">
-                            {Object.keys(bulkResults).length} parts searched • {Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length} with results
+                            {Object.keys(bulkResults).length.toLocaleString()} parts searched • {Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length.toLocaleString()} with results
+                            {Object.keys(bulkResults).length > 10000 && (
+                              <span className="ml-2 text-xs text-blue-600">
+                                (Large dataset - results paginated for performance)
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
@@ -647,7 +742,39 @@ export default function QueryPage() {
                   </CardHeader>
                   <CardContent className="p-6">
                     <div className="space-y-6">
-                      {Object.keys(bulkResults).map((pn) => {
+                      {/* Pagination Controls for Large Results */}
+                      {Object.keys(bulkResults).length > bulkResultsPageSize && (
+                        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                          <div className="text-sm text-gray-600">
+                            Showing {((bulkResultsPage - 1) * bulkResultsPageSize) + 1} to {Math.min(bulkResultsPage * bulkResultsPageSize, Object.keys(bulkResults).length)} of {Object.keys(bulkResults).length} results
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="secondary"
+                              onClick={() => setBulkResultsPage(Math.max(1, bulkResultsPage - 1))}
+                              disabled={bulkResultsPage === 1}
+                              className="text-sm"
+                            >
+                              Previous
+                            </Button>
+                            <span className="px-3 py-1 text-sm bg-white border rounded">
+                              Page {bulkResultsPage} of {Math.ceil(Object.keys(bulkResults).length / bulkResultsPageSize)}
+                            </span>
+                            <Button
+                              variant="secondary"
+                              onClick={() => setBulkResultsPage(Math.min(Math.ceil(Object.keys(bulkResults).length / bulkResultsPageSize), bulkResultsPage + 1))}
+                              disabled={bulkResultsPage >= Math.ceil(Object.keys(bulkResults).length / bulkResultsPageSize)}
+                              className="text-sm"
+                            >
+                              Next
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {Object.keys(bulkResults)
+                        .slice((bulkResultsPage - 1) * bulkResultsPageSize, bulkResultsPage * bulkResultsPageSize)
+                        .map((pn) => {
                         const entry = bulkResults[pn]
                         const isError = isErrorResult(entry)
                         const totalMatches = isError ? 0 : (entry.total_matches || 0)

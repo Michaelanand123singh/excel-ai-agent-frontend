@@ -291,6 +291,97 @@ export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers:
   return res.data as ApiBulkPartResults
 }
 
+// Chunked bulk search to avoid very large payloads/timeouts, preserving exact response shape
+export async function searchPartNumberBulkChunked(
+  fileId: number,
+  partNumbers: string[],
+  page = 1,
+  pageSize = 1000,
+  showAll = false,
+  searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid',
+  opts?: { 
+    chunkSize?: number; 
+    concurrency?: number; 
+    onProgress?: (completed: number, total: number, current: string) => void;
+    onResults?: (results: Record<string, ApiPartSearchResult | { error: string }>) => void;
+  }
+) {
+  const chunkSize = opts?.chunkSize ?? 100  // Match backend optimization
+  // Adaptive concurrency based on dataset size
+  const baseConcurrency = partNumbers.length > 50000 ? 16 : partNumbers.length > 10000 ? 12 : 8
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? baseConcurrency, 20))
+
+  const chunks: string[][] = []
+  for (let i = 0; i < partNumbers.length; i += chunkSize) {
+    chunks.push(partNumbers.slice(i, i + chunkSize))
+  }
+
+  const results: Record<string, ApiPartSearchResult | { error: string }> = {}
+  let totalLatency = 0
+  let completedChunks = 0
+
+  // Simple promise pool with progress tracking
+  let idx = 0
+  async function worker() {
+    while (idx < chunks.length) {
+      const myIdx = idx++
+      const slice = chunks[myIdx]
+      const t0 = Date.now()
+      
+      // Report progress
+      if (opts?.onProgress) {
+        opts.onProgress(completedChunks, chunks.length, `Processing chunk ${myIdx + 1}/${chunks.length}...`)
+      }
+      
+      try {
+        const res = await api.post('/api/v1/query/search-part-bulk', {
+          file_id: fileId,
+          part_numbers: slice,
+          page,
+          page_size: pageSize,
+          show_all: showAll,
+          search_mode: searchMode
+        })
+        const data = res.data as ApiBulkPartResults
+        Object.assign(results, data.results)
+        totalLatency += Date.now() - t0
+        completedChunks++
+        
+        // Stream results immediately as they come in
+        if (opts?.onResults) {
+          opts.onResults({ ...results }) // Send current results
+        }
+        
+        // Report progress after completion
+        if (opts?.onProgress) {
+          opts.onProgress(completedChunks, chunks.length, `Completed chunk ${myIdx + 1}/${chunks.length}`)
+        }
+      } catch (e: unknown) {
+        // Mark slice parts with error but continue others
+        const msg = (e as Error)?.message || 'Bulk slice failed'
+        for (const pn of slice) {
+          results[pn] = { error: msg }
+        }
+        completedChunks++
+        
+        if (opts?.onProgress) {
+          opts.onProgress(completedChunks, chunks.length, `Failed chunk ${myIdx + 1}/${chunks.length}`)
+        }
+      }
+    }
+  }
+
+  const workers = new Array(concurrency).fill(0).map(() => worker())
+  await Promise.all(workers)
+
+  return {
+    results,
+    total_parts: partNumbers.length,
+    latency_ms: totalLatency,
+    file_id: fileId,
+  } as ApiBulkPartResults
+}
+
 export async function searchPartNumberBulkUpload(fileId: number, file: File) {
   const form = new FormData()
   form.append('file', file)
