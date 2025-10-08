@@ -50,7 +50,7 @@ const getApiBaseUrl = () => {
 };
 
 const API_BASE = getApiBaseUrl();
-const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 120000; // 2 minutes for bulk searches
+const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 60000; // 1 minute for bulk searches (optimized backend)
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
 console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
