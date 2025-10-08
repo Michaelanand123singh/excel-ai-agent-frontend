@@ -50,8 +50,9 @@ const getApiBaseUrl = () => {
 };
 
 const API_BASE = getApiBaseUrl();
-const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 120000; // 2 minutes default
-const API_TIMEOUT_CHUNK = import.meta.env.VITE_API_TIMEOUT_CHUNK ? parseInt(import.meta.env.VITE_API_TIMEOUT_CHUNK) : 120000; // per-chunk timeout
+const RAW_API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 120000; // env/default
+const API_TIMEOUT = Math.max(RAW_API_TIMEOUT || 0, 60000); // enforce minimum 60s to avoid 30s cutoffs
+const API_TIMEOUT_CHUNK = import.meta.env.VITE_API_TIMEOUT_CHUNK ? Math.max(parseInt(import.meta.env.VITE_API_TIMEOUT_CHUNK), 60000) : 120000; // per-chunk timeout
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
 console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
