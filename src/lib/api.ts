@@ -50,7 +50,8 @@ const getApiBaseUrl = () => {
 };
 
 const API_BASE = getApiBaseUrl();
-const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 60000; // 1 minute for bulk searches (optimized backend)
+const API_TIMEOUT = import.meta.env.VITE_API_TIMEOUT ? parseInt(import.meta.env.VITE_API_TIMEOUT) : 120000; // 2 minutes default
+const API_TIMEOUT_CHUNK = import.meta.env.VITE_API_TIMEOUT_CHUNK ? parseInt(import.meta.env.VITE_API_TIMEOUT_CHUNK) : 120000; // per-chunk timeout
 
 console.log('VITE_API_BASE_URL:', import.meta.env.VITE_API_BASE_URL)
 console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
@@ -306,10 +307,12 @@ export async function searchPartNumberBulkChunked(
     onResults?: (results: Record<string, ApiPartSearchResult | { error: string }>) => void;
   }
 ) {
-  const chunkSize = opts?.chunkSize ?? 100  // Match backend optimization
-  // Adaptive concurrency based on dataset size
-  const baseConcurrency = partNumbers.length > 50000 ? 16 : partNumbers.length > 10000 ? 12 : 8
-  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? baseConcurrency, 20))
+  // Heuristic: for 500+ parts, use smaller slices to keep each request <30s
+  const autoChunk = partNumbers.length >= 500 ? 25 : partNumbers.length >= 200 ? 50 : 100
+  const chunkSize = opts?.chunkSize ?? autoChunk
+  // Adaptive concurrency: keep modest for stability under load
+  const baseConcurrency = partNumbers.length > 50000 ? 12 : partNumbers.length > 10000 ? 10 : partNumbers.length >= 500 ? 8 : 6
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? baseConcurrency, 16))
 
   const chunks: string[][] = []
   for (let i = 0; i < partNumbers.length; i += chunkSize) {
@@ -341,7 +344,7 @@ export async function searchPartNumberBulkChunked(
           page_size: pageSize,
           show_all: showAll,
           search_mode: searchMode
-        })
+        }, { timeout: API_TIMEOUT_CHUNK })
         const data = res.data as ApiBulkPartResults
         Object.assign(results, data.results)
         totalLatency += Date.now() - t0
