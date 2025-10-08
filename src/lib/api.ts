@@ -445,6 +445,26 @@ export async function deleteFile(fileId: number) {
   return res.data as { message: string }
 }
 
+export async function resetStuckFile(fileId: number) {
+  const res = await api.patch(`/api/v1/upload/${fileId}/reset`)
+  return res.data as { message: string; new_status?: string; current_status?: string }
+}
+
+export async function listStuckFiles() {
+  const res = await api.get('/api/v1/upload/stuck')
+  return res.data as { 
+    stuck_files: Array<{
+      id: number
+      filename: string
+      status: string
+      size_bytes: number
+      content_type: string
+      rows_count: number
+    }>
+    count: number
+  }
+}
+
 export async function testSearchEndpoint(fileId: number) {
   const res = await api.get(`/api/v1/query/test-search/${fileId}`)
   return res.data as { 

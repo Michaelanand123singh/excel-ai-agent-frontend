@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
-import { getFileStatus, testUpload, uploadFile, wsUrl } from '../lib/api'
+import { getFileStatus, testUpload, uploadFile, wsUrl, resetStuckFile } from '../lib/api'
 import { useDatasets, type Dataset } from '../store/datasets'
 import { useToast } from '../hooks/useToast'
 
@@ -156,12 +156,42 @@ export default function UploadPage() {
       const saved = localStorage.getItem('upload_tracking_file_id')
       const id = saved ? parseInt(saved) : undefined
       if (id && !Number.isNaN(id)) {
-        setFileId(id)
-        setProgress('resuming...')
-        connectWs(id)
+        // Check if the file is actually still processing
+        checkFileStatusAndResume(id)
       }
     } catch {}
   }, [])
+
+  async function checkFileStatusAndResume(id: number) {
+    try {
+      const status = await getFileStatus(id)
+      if (status.status === 'processing') {
+        setFileId(id)
+        setProgress('resuming...')
+        connectWs(id)
+      } else if (status.status === 'processed') {
+        // File is already processed, redirect to query page
+        setFileId(id)
+        setProgress('already processed')
+        setRedirecting(true)
+        setTimeout(() => navigate(`/query?fileId=${id}`), 1000)
+      } else if (status.status === 'failed') {
+        // File failed, clear the tracking and allow new uploads
+        localStorage.removeItem('upload_tracking_file_id')
+        setProgress('previous upload failed - ready for new upload')
+        showToast('Previous upload failed. You can now upload a new file.', 'warning')
+      } else {
+        // Unknown status, clear tracking
+        localStorage.removeItem('upload_tracking_file_id')
+        setProgress('ready for upload')
+      }
+    } catch (error) {
+      // File not found or error, clear tracking
+      localStorage.removeItem('upload_tracking_file_id')
+      setProgress('ready for upload')
+      console.warn('Could not check file status:', error)
+    }
+  }
 
   // Prevent accidental navigation while upload request is in-flight to avoid browser aborting the request
   useEffect(() => {
@@ -192,7 +222,7 @@ export default function UploadPage() {
             disabled={uploading}
             className="mb-3"
           />
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button 
               onClick={handleUpload} 
               disabled={uploading}
@@ -221,6 +251,30 @@ export default function UploadPage() {
             >
               {uploading ? <Spinner size={16} /> : 'Use Sample'}
             </Button>
+            {fileId && !uploading && (
+              <Button 
+                variant="outline" 
+                onClick={async () => {
+                  try {
+                    // Try to reset the stuck file on the backend
+                    await resetStuckFile(fileId)
+                    showToast('Reset stuck file on server', 'success')
+                  } catch (error) {
+                    console.warn('Could not reset file on server:', error)
+                  }
+                  
+                  // Clear local state regardless
+                  localStorage.removeItem('upload_tracking_file_id')
+                  setFileId(undefined)
+                  setProgress('ready for upload')
+                  setError(undefined)
+                  showToast('Cleared stuck upload. Ready for new file.', 'success')
+                }}
+                className="text-orange-600 border-orange-300 hover:bg-orange-50"
+              >
+                Clear Stuck Upload
+              </Button>
+            )}
           </div>
           
           {error && (
