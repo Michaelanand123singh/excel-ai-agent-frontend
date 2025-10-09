@@ -4,6 +4,7 @@ import { Card, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
 import { useDatasets } from '../store/datasets'
+import { useAuth } from '../store/auth'
 import { deleteFile } from '../lib/api'
 import { cancelUpload } from '../lib/api'
 import { getFileRows } from '../lib/api'
@@ -26,6 +27,7 @@ const wsUrl = (path: string) => {
 
 export default function FilesPage() {
   const { files, isLoading, error, loadFiles, removeFile } = useDatasets()
+  const { token } = useAuth()
   const [deleting, setDeleting] = useState<number | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [fileProgress, setFileProgress] = useState<Record<number, {
@@ -47,21 +49,47 @@ export default function FilesPage() {
   const [detailsLoading, setDetailsLoading] = useState(false)
 
   async function openDetails(fileId: number) {
+    console.log('Opening details for file:', fileId, 'token:', token ? 'present' : 'missing')
+    if (!token) {
+      showToast('Authentication required. Please log in again.', 'error')
+      navigate('/login')
+      return
+    }
+    
+    // Set modal state first
     setDetailsFileId(fileId)
     setDetailsPage(1)
     setDetailsOpen(true)
-    await loadDetails(fileId, 1, detailsPageSize)
+    
+    console.log('Modal state set, detailsOpen:', true, 'detailsFileId:', fileId)
+    
+    // Load details after modal is open
+    try {
+      await loadDetails(fileId, 1, detailsPageSize)
+    } catch (e) {
+      console.error('Error loading details:', e)
+      // Don't close modal on error, just show error message
+    }
   }
 
   async function loadDetails(fileId: number, page: number, pageSize: number) {
     setDetailsLoading(true)
     try {
+      console.log('Loading details for file:', fileId, 'page:', page, 'pageSize:', pageSize)
       const r = await getFileRows(fileId, page, pageSize)
+      console.log('Details loaded successfully:', r)
       setDetailsColumns(r.columns || [])
       setDetailsRows(r.rows || [])
       setDetailsTotalPages(r.total_pages || 1)
     } catch (e) {
-      showToast('Failed to load details', 'error')
+      console.error('Failed to load details:', e)
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error'
+      showToast(`Failed to load details: ${errorMessage}`, 'error')
+      
+      // If it's an auth error, don't close the modal, just show error
+      if (errorMessage.includes('401') || errorMessage.includes('unauthorized')) {
+        showToast('Authentication expired. Please refresh the page and log in again.', 'error')
+      }
     } finally {
       setDetailsLoading(false)
     }
@@ -344,10 +372,10 @@ export default function FilesPage() {
                             variant="secondary"
                             onClick={async () => {
                               try {
-                                const r = await cancelUpload(file.id)
+                                await cancelUpload(file.id)
                                 showToast(`Cancelled file ${file.id}`, 'success')
                                 await loadFiles()
-                              } catch (e) {
+                              } catch {
                                 showToast('Cancel failed', 'error')
                               }
                             }}
@@ -400,7 +428,10 @@ export default function FilesPage() {
       {/* Details Modal */}
       <Modal
         open={detailsOpen}
-        onClose={() => setDetailsOpen(false)}
+        onClose={() => {
+          console.log('Closing details modal, detailsOpen:', detailsOpen)
+          setDetailsOpen(false)
+        }}
         title={detailsFileId ? `Dataset ds_${detailsFileId} - Rows` : 'Dataset Rows'}
         footer={(
           <div className="flex items-center gap-3 w-full justify-between">

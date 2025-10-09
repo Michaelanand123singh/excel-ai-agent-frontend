@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -13,6 +13,13 @@ export default function UploadPage() {
   const uploadAbortRef = useRef<AbortController | null>(null)
   const [fileId, setFileId] = useState<number>()
   const [progress, setProgress] = useState<string>('-')
+  const [progressDetails, setProgressDetails] = useState<{
+    type?: string
+    totalRows?: number
+    elasticsearchSynced?: boolean
+    googleCloudSearchSynced?: boolean
+    bulkSearchReady?: boolean
+  }>({})
   const [connecting, setConnecting] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -35,7 +42,11 @@ export default function UploadPage() {
       const meta = await uploadFile(f, uploadAbortRef.current.signal)
       setFileId(meta.id)
       // persist tracking so we can resume progress if user navigates away
-      try { localStorage.setItem('upload_tracking_file_id', String(meta.id)) } catch {}
+      try { 
+        localStorage.setItem('upload_tracking_file_id', String(meta.id)) 
+      } catch {
+        // Ignore localStorage errors
+      }
       // Cast minimal upload response into Dataset shape for local state
       const ds: Dataset = {
         id: meta.id,
@@ -49,7 +60,21 @@ export default function UploadPage() {
       connectWs(meta.id)
       showToast(`File "${meta.filename}" uploaded successfully!`, 'success')
     } catch (err: unknown) {
-      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Upload failed'
+      let errorMsg = 'Upload failed'
+      if (err && typeof err === 'object' && 'response' in err) {
+        const response = (err as { response?: { data?: { detail?: string | Array<{ msg?: string }> }; status?: number } }).response
+        if (response?.data?.detail) {
+          if (Array.isArray(response.data.detail)) {
+            errorMsg = response.data.detail.map((d) => d.msg || String(d)).join(', ')
+          } else {
+            errorMsg = String(response.data.detail)
+          }
+        } else if (response?.status) {
+          errorMsg = `Upload failed with status ${response.status}`
+        }
+      } else if (err instanceof Error) {
+        errorMsg = err.message
+      }
       setError(errorMsg)
       showToast(errorMsg, 'error')
     } finally {
@@ -76,7 +101,21 @@ export default function UploadPage() {
       connectWs(meta.id)
       showToast(`Sample file "${meta.filename}" uploaded successfully!`, 'success')
     } catch (err: unknown) {
-      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Test upload failed'
+      let errorMsg = 'Test upload failed'
+      if (err && typeof err === 'object' && 'response' in err) {
+        const response = (err as { response?: { data?: { detail?: string | Array<{ msg?: string }> }; status?: number } }).response
+        if (response?.data?.detail) {
+          if (Array.isArray(response.data.detail)) {
+            errorMsg = response.data.detail.map((d) => d.msg || String(d)).join(', ')
+          } else {
+            errorMsg = String(response.data.detail)
+          }
+        } else if (response?.status) {
+          errorMsg = `Test upload failed with status ${response.status}`
+        }
+      } else if (err instanceof Error) {
+        errorMsg = err.message
+      }
       setError(errorMsg)
       showToast(errorMsg, 'error')
     } finally {
@@ -84,7 +123,7 @@ export default function UploadPage() {
     }
   }
 
-  function connectWs(id: number) {
+  const connectWs = useCallback((id: number) => {
     setConnecting(true)
     const socket = new WebSocket(wsUrl(`/api/v1/ws/${id}`))
     socket.onopen = () => setConnecting(false)
@@ -92,11 +131,32 @@ export default function UploadPage() {
       try {
         const data = JSON.parse(evt.data)
         if (data.type && data.file_id === id) {
-          setProgress(`${data.type}${data.total_rows ? ` • total ${data.total_rows}` : ''}`)
+          setProgressDetails({
+            type: data.type,
+            totalRows: data.total_rows,
+            elasticsearchSynced: data.elasticsearch_synced,
+            googleCloudSearchSynced: data.google_cloud_search_synced,
+            bulkSearchReady: data.bulk_search_ready
+          })
+          
+          // Update progress text based on type
+          let progressText = data.type
+          if (data.total_rows) {
+            progressText += ` • ${data.total_rows.toLocaleString()} rows`
+          }
+          if (data.type === 'processing_complete') {
+            progressText += ' • Ready for search!'
+          }
+          setProgress(progressText)
+          
           // Auto-redirect when processing is complete
           if (data.type === 'processing_complete') {
             setRedirecting(true)
-            try { localStorage.removeItem('upload_tracking_file_id') } catch {}
+            try { 
+              localStorage.removeItem('upload_tracking_file_id') 
+            } catch {
+              // Ignore localStorage errors
+            }
             setTimeout(() => navigate(`/query?fileId=${id}`), 1500)
           }
         }
@@ -114,7 +174,10 @@ export default function UploadPage() {
       if (!alive) return
       try {
         const s = await getFileStatus(id, controller.signal)
-        if (s.status) setProgress(`status: ${s.status}`)
+        if (s.status) {
+          setProgress(`status: ${s.status}`)
+          setProgressDetails({ type: s.status })
+        }
         if (s.status === 'processed') {
           alive = false
           setRedirecting(true)
@@ -141,7 +204,7 @@ export default function UploadPage() {
     // store cleanup for effect unmount
     cleanupRef.current = cleanup
     return cleanup
-  }
+  }, [navigate])
 
   const cleanupRef = useRef<(() => void) | null>(null)
   useEffect(() => {
@@ -152,6 +215,36 @@ export default function UploadPage() {
 
   // On mount, resume tracking if a file id was stored earlier
   useEffect(() => {
+    const checkFileStatusAndResume = async (id: number) => {
+      try {
+        const status = await getFileStatus(id)
+        if (status.status === 'processing') {
+          setFileId(id)
+          setProgress('resuming...')
+          connectWs(id)
+        } else if (status.status === 'processed') {
+          // File is already processed, show option to go to query or upload new
+          setFileId(id)
+          setProgress('already processed - ready for new upload or go to query')
+          showToast('File already processed. You can upload a new file or go to query page.', 'info')
+        } else if (status.status === 'failed') {
+          // File failed, clear the tracking and allow new uploads
+          localStorage.removeItem('upload_tracking_file_id')
+          setProgress('previous upload failed - ready for new upload')
+          showToast('Previous upload failed. You can now upload a new file.', 'warning')
+        } else {
+          // Unknown status, clear tracking
+          localStorage.removeItem('upload_tracking_file_id')
+          setProgress('ready for upload')
+        }
+      } catch (error) {
+        // File not found or error, clear tracking
+        localStorage.removeItem('upload_tracking_file_id')
+        setProgress('ready for upload')
+        console.warn('Could not check file status:', error)
+      }
+    }
+
     try {
       const saved = localStorage.getItem('upload_tracking_file_id')
       const id = saved ? parseInt(saved) : undefined
@@ -159,38 +252,10 @@ export default function UploadPage() {
         // Check if the file is actually still processing
         checkFileStatusAndResume(id)
       }
-    } catch {}
-  }, [])
-
-  async function checkFileStatusAndResume(id: number) {
-    try {
-      const status = await getFileStatus(id)
-      if (status.status === 'processing') {
-        setFileId(id)
-        setProgress('resuming...')
-        connectWs(id)
-      } else if (status.status === 'processed') {
-        // File is already processed, show option to go to query or upload new
-        setFileId(id)
-        setProgress('already processed - ready for new upload or go to query')
-        showToast('File already processed. You can upload a new file or go to query page.', 'info')
-      } else if (status.status === 'failed') {
-        // File failed, clear the tracking and allow new uploads
-        localStorage.removeItem('upload_tracking_file_id')
-        setProgress('previous upload failed - ready for new upload')
-        showToast('Previous upload failed. You can now upload a new file.', 'warning')
-      } else {
-        // Unknown status, clear tracking
-        localStorage.removeItem('upload_tracking_file_id')
-        setProgress('ready for upload')
-      }
-    } catch (error) {
-      // File not found or error, clear tracking
-      localStorage.removeItem('upload_tracking_file_id')
-      setProgress('ready for upload')
-      console.warn('Could not check file status:', error)
+    } catch {
+      // Ignore localStorage errors
     }
-  }
+  }, [connectWs, showToast])
 
   // Prevent accidental navigation while upload request is in-flight to avoid browser aborting the request
   useEffect(() => {
@@ -237,7 +302,9 @@ export default function UploadPage() {
                     setUploading(false)
                     setProgress('upload cancelled')
                     showToast('Upload cancelled', 'success')
-                  } catch {}
+                  } catch {
+                    // Ignore abort errors
+                  }
                 }}
               >
                 Cancel Upload
@@ -304,7 +371,7 @@ export default function UploadPage() {
           
           {error && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md">
-              <div className="text-sm text-red-600">{error}</div>
+              <div className="text-sm text-red-600">{String(error)}</div>
             </div>
           )}
           
@@ -314,6 +381,55 @@ export default function UploadPage() {
             {redirecting ? 'Processing complete! Redirecting to Query page...' : 
              connecting ? 'Connecting...' : `Progress: ${progress}`}
           </div>
+          
+          {/* Detailed progress indicators */}
+          {progressDetails.type && (
+            <div className="mt-3 space-y-2">
+              <div className="text-xs text-gray-600 font-medium">Processing Status:</div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs">
+                  <div className={`w-2 h-2 rounded-full ${
+                    progressDetails.type === 'processing_started' ? 'bg-blue-500' :
+                    progressDetails.type === 'download_complete' ? 'bg-green-500' :
+                    progressDetails.type === 'processing_complete' ? 'bg-green-500' : 'bg-gray-300'
+                  }`}></div>
+                  <span className="text-gray-600">
+                    {progressDetails.type === 'processing_started' && 'Processing started'}
+                    {progressDetails.type === 'download_complete' && 'File downloaded'}
+                    {progressDetails.type === 'batch_progress' && 'Processing data...'}
+                    {progressDetails.type === 'processing_complete' && 'Processing complete'}
+                  </span>
+                </div>
+                
+                {progressDetails.totalRows && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                    <span className="text-gray-600">
+                      {progressDetails.totalRows.toLocaleString()} rows processed
+                    </span>
+                  </div>
+                )}
+                
+                <div className="flex items-center gap-2 text-xs">
+                  <div className={`w-2 h-2 rounded-full ${
+                    progressDetails.elasticsearchSynced ? 'bg-green-500' : 'bg-yellow-500'
+                  }`}></div>
+                  <span className="text-gray-600">
+                    Elasticsearch sync: {progressDetails.elasticsearchSynced ? 'Complete' : 'In progress...'}
+                  </span>
+                </div>
+                
+                {progressDetails.bulkSearchReady && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                    <span className="text-green-600 font-medium">
+                      ✓ Bulk search ready - super fast search enabled!
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {fileId && <div className="text-xs text-gray-500">file id: {fileId}</div>}
         </CardContent>
       </Card>

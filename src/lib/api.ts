@@ -35,14 +35,27 @@ const getApiBaseUrl = () => {
     }
   }
  
-  // Production heuristic: use current origin if available
+  // Production heuristic: use current origin if available (but not for frontend domains)
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin
+    const host = window.location.host
+    // Don't use frontend origin for API calls
+    if (!/excel-ai-agent-frontend-/.test(host)) {
+      return window.location.origin
+    }
   }
 
   // Development mode fallback
   if (import.meta.env.MODE === 'development') {
     return 'http://localhost:8000';
+  }
+
+  // Production fallback: try to detect backend from frontend hostname
+  if (typeof window !== 'undefined' && window.location?.host) {
+    const host = window.location.host
+    if (/excel-ai-agent-frontend-/.test(host)) {
+      const backendHost = host.replace('excel-ai-agent-frontend-', 'excel-ai-agent-backends-')
+      return `https://${backendHost}`
+    }
   }
 
   // Final fallback
@@ -59,6 +72,8 @@ console.log('VITE_API_TIMEOUT:', import.meta.env.VITE_API_TIMEOUT)
 console.log('Final API_BASE_URL:', API_BASE)
 console.log('Final API_TIMEOUT:', API_TIMEOUT)
 console.log('Full API URL:', `${API_BASE}/api`)
+console.log('Current host:', typeof window !== 'undefined' ? window.location.host : 'server-side')
+console.log('Current origin:', typeof window !== 'undefined' ? window.location.origin : 'server-side')
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -206,13 +221,46 @@ export async function login(username: string, password: string) {
 }
 
 export async function uploadFile(file: File, signal?: AbortSignal) {
-  const form = new FormData()
-  form.append('file', file)
-  const res = await api.post('/api/v1/upload', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    signal,
-  })
-  return res.data as { id: number; filename: string; status: string; size_bytes: number }
+  // For large files, perform chunked upload to bypass Cloud Run limits
+  const CHUNK_SIZE = 20 * 1024 * 1024 // 20MB chunks (reduced number of requests)
+  const isLarge = file.size > CHUNK_SIZE
+  if (!isLarge) {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await api.post('/api/v1/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      signal,
+    })
+    return res.data as { id: number; filename: string; status: string; size_bytes: number }
+  }
+  // 1) init
+  const initRes = await api.post('/api/v1/upload/multipart/init', {
+    filename: file.name,
+    content_type: file.type || 'application/octet-stream',
+    total_size: file.size,
+  }, { signal })
+  const { upload_id, file_id } = initRes.data as { upload_id: string; file_id: number }
+  // 2) send parts
+  const totalParts = Math.ceil(file.size / CHUNK_SIZE)
+  for (let part = 0; part < totalParts; part++) {
+    const start = part * CHUNK_SIZE
+    const end = Math.min(start + CHUNK_SIZE, file.size)
+    const blob = file.slice(start, end)
+    const arrayBuffer = await blob.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
+    
+    // Add progress logging
+    console.log(`Uploading chunk ${part + 1}/${totalParts} (${Math.round((part + 1) / totalParts * 100)}%)`)
+    
+    await api.post(`/api/v1/upload/multipart/part`, bytes, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+      params: { upload_id, part_number: part + 1, total_parts: totalParts },
+      signal,
+    })
+  }
+  // 3) complete
+  const completeRes = await api.post('/api/v1/upload/multipart/complete', { upload_id }, { signal })
+  return { id: file_id, filename: file.name, status: completeRes.data.status, size_bytes: completeRes.data.size_bytes }
 }
 
 export async function testUpload() {
