@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
 import { useDatasets } from '../store/datasets'
 import { deleteFile } from '../lib/api'
+import { cancelUpload } from '../lib/api'
 import { useToast } from '../hooks/useToast'
 import { 
   TrashIcon, 
@@ -304,8 +305,27 @@ export default function FilesPage() {
                         {file.status === 'uploaded' && 'File is being processed...'}
                         {file.status === 'stored' && 'File is being analyzed...'}
                         {file.status === 'error' && 'Processing failed. Please try uploading again.'}
+                        {file.status === 'cancelled' && 'Processing cancelled by user.'}
                       </div>
-                      
+                      {(file.status === 'uploaded' || file.status === 'stored') && (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="secondary"
+                            onClick={async () => {
+                              try {
+                                const r = await cancelUpload(file.id)
+                                showToast(`Cancelled file ${file.id}`, 'success')
+                                await loadFiles()
+                              } catch (e) {
+                                showToast('Cancel failed', 'error')
+                              }
+                            }}
+                            className="text-sm border border-gray-300 text-gray-700 hover:bg-gray-50"
+                          >
+                            Cancel Processing
+                          </Button>
+                        </div>
+                      )}
                       {/* Progress bar for processing files */}
                       {fileProgress[file.id] && (file.status === 'uploaded' || file.status === 'stored') && (
                         <div className="space-y-2">

@@ -265,6 +265,7 @@ export type ApiPartSearchResult = {
 }
 
 export async function searchPartNumber(fileId: number, partNumber: string, page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  // Route single search through ES-backed unified path for consistency
   const res = await api.post('/api/v1/query/search-part', { file_id: fileId, part_number: partNumber, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
   return res.data as ApiPartSearchResult
 }
@@ -277,12 +278,14 @@ export type ApiBulkPartResults = {
 }
 
 export async function searchPartNumberBulk(fileId: number, partNumbers: string[], page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
-  const res = await api.post('/api/v1/query/search-part-bulk', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
+  // Prefer Elasticsearch ultra-fast endpoint for bulk searches
+  const res = await api.post('/api/v1/query-elasticsearch/search-part-bulk-elasticsearch', { file_id: fileId, part_numbers: partNumbers, page, page_size: pageSize, show_all: showAll, search_mode: searchMode })
   return res.data as ApiBulkPartResults
 }
 
-export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers: string[], page = 1, pageSize = 1000, showAll = false, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
-  const res = await api.post('/api/v1/query/search-part-bulk', {
+export async function searchPartNumberBulkUltraFast(fileId: number, partNumbers: string[], page = 1, pageSize = 10000, showAll = true, searchMode: 'exact' | 'fuzzy' | 'hybrid' = 'hybrid') {
+  // Keep alias but route to Elasticsearch endpoint
+  const res = await api.post('/api/v1/query-elasticsearch/search-part-bulk-elasticsearch', {
     file_id: fileId,
     part_numbers: partNumbers,
     page,
@@ -338,7 +341,7 @@ export async function searchPartNumberBulkChunked(
       }
       
       try {
-        const res = await api.post('/api/v1/query/search-part-bulk', {
+        const res = await api.post('/api/v1/query-elasticsearch/search-part-bulk-elasticsearch', {
           file_id: fileId,
           part_numbers: slice,
           page,
@@ -479,4 +482,9 @@ export async function testSearchEndpoint(fileId: number) {
     row_count?: number
     columns?: Array<{ name: string; type: string }>
   }
+}
+
+export async function cancelUpload(fileId: number) {
+  const res = await api.post(`/api/v1/upload/${fileId}/cancel`)
+  return res.data as { status: string; file_id?: number; message?: string }
 }
