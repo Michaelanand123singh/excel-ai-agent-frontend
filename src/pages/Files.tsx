@@ -6,6 +6,8 @@ import { Spinner } from '../components/ui/Spinner'
 import { useDatasets } from '../store/datasets'
 import { deleteFile } from '../lib/api'
 import { cancelUpload } from '../lib/api'
+import { getFileRows } from '../lib/api'
+import { Modal } from '../components/ui/Modal'
 import { useToast } from '../hooks/useToast'
 import { 
   TrashIcon, 
@@ -35,6 +37,35 @@ export default function FilesPage() {
   const websocketsRef = useRef<Map<number, WebSocket>>(new Map())
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [detailsFileId, setDetailsFileId] = useState<number | null>(null)
+  const [detailsPage, setDetailsPage] = useState(1)
+  const [detailsPageSize, setDetailsPageSize] = useState(100)
+  const [detailsColumns, setDetailsColumns] = useState<string[]>([])
+  const [detailsRows, setDetailsRows] = useState<Array<Record<string, unknown>>>([])
+  const [detailsTotalPages, setDetailsTotalPages] = useState(1)
+  const [detailsLoading, setDetailsLoading] = useState(false)
+
+  async function openDetails(fileId: number) {
+    setDetailsFileId(fileId)
+    setDetailsPage(1)
+    setDetailsOpen(true)
+    await loadDetails(fileId, 1, detailsPageSize)
+  }
+
+  async function loadDetails(fileId: number, page: number, pageSize: number) {
+    setDetailsLoading(true)
+    try {
+      const r = await getFileRows(fileId, page, pageSize)
+      setDetailsColumns(r.columns || [])
+      setDetailsRows(r.rows || [])
+      setDetailsTotalPages(r.total_pages || 1)
+    } catch (e) {
+      showToast('Failed to load details', 'error')
+    } finally {
+      setDetailsLoading(false)
+    }
+  }
 
   useEffect(() => {
     loadFiles()
@@ -291,7 +322,7 @@ export default function FilesPage() {
                     </Button>
                     <Button
                       variant="secondary"
-                      onClick={() => navigate(`/upload?fileId=${file.id}`)}
+                      onClick={() => openDetails(file.id)}
                       className="flex-1 text-sm px-3 py-2"
                     >
                       <DocumentIcon className="w-4 h-4 mr-1" />
@@ -365,6 +396,98 @@ export default function FilesPage() {
           ))}
         </div>
       )}
+
+      {/* Details Modal */}
+      <Modal
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        title={detailsFileId ? `Dataset ds_${detailsFileId} - Rows` : 'Dataset Rows'}
+        footer={(
+          <div className="flex items-center gap-3 w-full justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600">Page size:</span>
+              <select
+                className="border border-gray-300 rounded-md px-2 py-1 text-sm"
+                value={detailsPageSize}
+                onChange={async (e) => {
+                  const size = parseInt(e.target.value)
+                  setDetailsPageSize(size)
+                  setDetailsPage(1)
+                  if (detailsFileId) await loadDetails(detailsFileId, 1, size)
+                }}
+              >
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={500}>500</option>
+                <option value={1000}>1000</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  if (!detailsFileId) return
+                  const p = Math.max(1, detailsPage - 1)
+                  setDetailsPage(p)
+                  await loadDetails(detailsFileId, p, detailsPageSize)
+                }}
+                disabled={detailsPage <= 1 || detailsLoading}
+              >
+                Prev
+              </Button>
+              <span className="text-sm text-gray-600">
+                Page {detailsPage} of {detailsTotalPages}
+              </span>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  if (!detailsFileId) return
+                  const p = Math.min(detailsTotalPages, detailsPage + 1)
+                  setDetailsPage(p)
+                  await loadDetails(detailsFileId, p, detailsPageSize)
+                }}
+                disabled={detailsPage >= detailsTotalPages || detailsLoading}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
+      >
+        {detailsLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Spinner size={24} />
+            <span className="ml-2 text-sm text-gray-600">Loading rows...</span>
+          </div>
+        ) : (
+          <div className="overflow-auto">
+            {detailsColumns.length === 0 ? (
+              <div className="text-center text-sm text-gray-500 py-6">No rows found.</div>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {detailsColumns.map((col) => (
+                      <th key={col} className="px-3 py-2 text-left font-medium text-gray-700 whitespace-nowrap">{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {detailsRows.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50">
+                      {detailsColumns.map((col) => (
+                        <td key={col} className="px-3 py-2 text-gray-800 max-w-[320px] truncate" title={String(row[col] ?? '')}>
+                          {String(row[col] ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

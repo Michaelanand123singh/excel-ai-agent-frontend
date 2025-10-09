@@ -488,3 +488,17 @@ export async function cancelUpload(fileId: number) {
   const res = await api.post(`/api/v1/upload/${fileId}/cancel`)
   return res.data as { status: string; file_id?: number; message?: string }
 }
+
+export async function getFileRows(fileId: number, page = 1, pageSize = 100) {
+  const res = await api.get(`/api/v1/upload/${fileId}/rows`, { params: { page, page_size: pageSize } })
+  return res.data as {
+    file_id: number
+    table: string
+    page: number
+    page_size: number
+    total_rows: number
+    total_pages: number
+    columns: string[]
+    rows: Array<Record<string, unknown>>
+  }
+}
