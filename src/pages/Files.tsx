@@ -56,6 +56,7 @@ export default function FilesPage() {
     error?: string
   }>>({})
   const [retryingSync, setRetryingSync] = useState<Set<number>>(new Set())
+  const [loadingStatus, setLoadingStatus] = useState<Set<number>>(new Set())
 
   async function openDetails(fileId: number) {
     console.log('Opening details for file:', fileId, 'token:', token ? 'present' : 'missing')
@@ -105,6 +106,13 @@ export default function FilesPage() {
   }
 
   async function loadEsSyncStatus(fileId: number) {
+    // Prevent concurrent requests for the same file
+    if (loadingStatus.has(fileId)) {
+      return
+    }
+    
+    setLoadingStatus(prev => new Set(prev).add(fileId))
+    
     try {
       const status = await getElasticsearchStatus(fileId)
       setEsSyncStatus(prev => ({
@@ -116,13 +124,25 @@ export default function FilesPage() {
       }))
     } catch (e) {
       console.error('Error loading ES sync status:', e)
-      setEsSyncStatus(prev => ({
-        ...prev,
-        [fileId]: {
-          status: 'failed',
-          error: 'Failed to load status'
-        }
-      }))
+      // Only set as failed if it's not a canceled request
+      if (e && typeof e === 'object' && 'code' in e && e.code !== 'ERR_CANCELED') {
+        setEsSyncStatus(prev => ({
+          ...prev,
+          [fileId]: {
+            status: 'failed',
+            error: 'Failed to load status'
+          }
+        }))
+      } else if (e && typeof e === 'object' && 'code' in e && e.code === 'ERR_CANCELED') {
+        // Silently ignore canceled requests - they're expected
+        console.log(`ES sync status request for file ${fileId} was canceled (expected)`)
+      }
+    } finally {
+      setLoadingStatus(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(fileId)
+        return newSet
+      })
     }
   }
 
@@ -195,18 +215,21 @@ export default function FilesPage() {
     })
   }, [files, esSyncStatus])
 
-  // Periodic refresh of ES sync status for processed files
+  // Periodic refresh of ES sync status for processed files (with debouncing)
   useEffect(() => {
     const interval = setInterval(() => {
       files.forEach(file => {
-        if (file.status === 'processed' && esSyncStatus[file.id]?.status === 'pending') {
+        if (file.status === 'processed' && 
+            esSyncStatus[file.id]?.status === 'pending' && 
+            !retryingSync.has(file.id) &&
+            !loadingStatus.has(file.id)) {
           loadEsSyncStatus(file.id)
         }
       })
-    }, 5000) // Check every 5 seconds
+    }, 15000) // Check every 15 seconds (further reduced frequency)
 
     return () => clearInterval(interval)
-  }, [files, esSyncStatus])
+  }, [files, esSyncStatus, retryingSync, loadingStatus])
 
   // Connect to websockets for files that are processing
   useEffect(() => {
