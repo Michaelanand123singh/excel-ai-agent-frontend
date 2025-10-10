@@ -333,7 +333,7 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
     
     // Small file processed directly
     return res.data as { id: number; filename: string; status: string; size_bytes: number }
-  } catch (error) {
+  } catch {
     // If unified upload fails, fall back to chunked upload
     console.log('Unified upload failed, falling back to chunked upload...')
     return await uploadFileChunked(file, signal)
@@ -595,6 +595,27 @@ export async function getAnalyticsSummary() {
 export function wsUrl(path: string) {
   const base = API_BASE.replace(/^http/, 'ws')
   return base + path
+}
+
+// Elasticsearch sync status and retry functions
+export async function getElasticsearchStatus(fileId: number) {
+  const res = await api.get(`/api/v1/upload/${fileId}/elasticsearch-status`)
+  return res.data as {
+    file_id: number
+    filename: string
+    elasticsearch_synced: boolean
+    elasticsearch_sync_error: string | null
+    status: 'synced' | 'failed' | 'pending' | 'syncing'
+  }
+}
+
+export async function retryElasticsearchSync(fileId: number) {
+  const res = await api.post(`/api/v1/upload/${fileId}/elasticsearch-retry`)
+  return res.data as {
+    message: string
+    file_id: number
+    status: 'syncing'
+  }
 }
 
 export async function getFileStatus(fileId: number, signal?: AbortSignal) {

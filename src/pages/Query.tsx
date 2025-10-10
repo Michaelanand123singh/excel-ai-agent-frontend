@@ -251,14 +251,82 @@ export default function QueryPage() {
           },
           onResults: (streamingResults) => {
             // Stream results immediately as they come in
-            setBulkResults(streamingResults as unknown as Record<string, BulkEntry>);
-            setStreamingCount(Object.keys(streamingResults).length);
+            // Transform ApiPartSearchResult to BulkEntry format
+            const transformed: Record<string, BulkEntry> = {};
+            for (const [partNumber, result] of Object.entries(streamingResults)) {
+              if ('error' in result) {
+                transformed[partNumber] = { error: result.error } as ErrorResult;
+              } else {
+                // Handle both ApiPartSearchResult and Elasticsearch response formats
+                const companies = result.companies || [];
+                const totalMatches = result.total_matches || 0;
+                
+                transformed[partNumber] = {
+                  companies: companies,
+                  total_matches: totalMatches,
+                  part_number: partNumber,
+                  message: result.message || (totalMatches > 0 ? 'Match found' : 'No matches'),
+                  latency_ms: result.latency_ms || 0,
+                  cached: result.cached || false,
+                  search_mode: result.search_mode || 'hybrid',
+                  match_type: result.match_type || 'unknown',
+                  search_engine: result.search_engine || 'unknown'
+                } as BulkEntry;
+              }
+            }
+            setBulkResults(transformed);
+            setStreamingCount(Object.keys(transformed).length);
+            
+            // Debug logging for streaming
+            console.log('Streaming results update:', {
+              count: Object.keys(transformed).length,
+              sampleResult: Object.values(transformed)[0],
+              hasResults: Object.values(transformed).some(r => !('error' in r) && r.total_matches > 0)
+            });
           }
         }
       );
-      setBulkResults(r.results as unknown as Record<string, BulkEntry>);
+      // Transform final results from ApiPartSearchResult to BulkEntry format
+      const finalTransformed: Record<string, BulkEntry> = {};
+      for (const [partNumber, result] of Object.entries(r.results)) {
+        if ('error' in result) {
+          finalTransformed[partNumber] = { error: result.error } as ErrorResult;
+        } else {
+          // Handle both ApiPartSearchResult and Elasticsearch response formats
+          const companies = result.companies || [];
+          const totalMatches = result.total_matches || 0;
+          
+          finalTransformed[partNumber] = {
+            companies: companies,
+            total_matches: totalMatches,
+            part_number: partNumber,
+            message: result.message || (totalMatches > 0 ? 'Match found' : 'No matches'),
+            latency_ms: result.latency_ms || 0,
+            cached: result.cached || false,
+            search_mode: result.search_mode || 'hybrid',
+            match_type: result.match_type || 'unknown',
+            search_engine: result.search_engine || 'unknown'
+          } as BulkEntry;
+        }
+      }
+      setBulkResults(finalTransformed);
       setBulkProgress(null);
       setStreamingCount(0); // Reset streaming count when complete
+      
+      // Debug logging
+      console.log('Bulk search completed:', {
+        totalParts: r.total_parts,
+        resultsCount: Object.keys(finalTransformed).length,
+        sampleResult: Object.values(finalTransformed)[0],
+        hasResults: Object.values(finalTransformed).some(r => !('error' in r) && r.total_matches > 0),
+        allResults: Object.entries(finalTransformed).slice(0, 3).map(([pn, result]) => ({
+          partNumber: pn,
+          totalMatches: 'error' in result ? 0 : result.total_matches,
+          companiesCount: 'error' in result ? 0 : result.companies?.length || 0,
+          hasError: 'error' in result
+        }))
+      });
+      
       // Don't automatically populate single search area - let user choose which part to view
       showToast(`✅ Search completed! Found results for ${r.total_parts} part numbers`, "success");
     } catch (err: unknown) {
@@ -711,7 +779,15 @@ export default function QueryPage() {
                 </CardContent>
               </Card>
               {/* --- Bulk Results --- */}
-              {bulkResults && (
+              {bulkResults && (() => {
+                console.log('Rendering bulk results:', {
+                  hasResults: !!bulkResults,
+                  resultCount: Object.keys(bulkResults).length,
+                  sampleKeys: Object.keys(bulkResults).slice(0, 3),
+                  sampleValues: Object.values(bulkResults).slice(0, 2)
+                });
+                return true;
+              })() && (
                 <Card className="shadow-lg border-0">
                   <CardHeader className="border-b border-gray-200 bg-gradient-to-r from-green-50 to-emerald-50">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -725,6 +801,13 @@ export default function QueryPage() {
                           <h2 className="text-xl font-semibold text-gray-900">Bulk Search Results</h2>
                           <p className="text-sm text-gray-600 mt-1">
                             {Object.keys(bulkResults).length.toLocaleString()} parts searched • {Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length.toLocaleString()} with results
+                            {(() => {
+                              const errorCount = Object.values(bulkResults).filter(r => isErrorResult(r)).length;
+                              const successCount = Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length;
+                              const noMatchCount = Object.values(bulkResults).filter(r => !isErrorResult(r) && r.total_matches === 0).length;
+                              console.log('Bulk results summary:', { errorCount, successCount, noMatchCount, total: Object.keys(bulkResults).length });
+                              return null;
+                            })()}
                             {Object.keys(bulkResults).length > 10000 && (
                               <span className="ml-2 text-xs text-blue-600">
                                 (Large dataset - results paginated for performance)

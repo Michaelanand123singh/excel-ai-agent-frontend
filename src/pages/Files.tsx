@@ -8,6 +8,7 @@ import { useAuth } from '../store/auth'
 import { deleteFile } from '../lib/api'
 import { cancelUpload } from '../lib/api'
 import { getFileRows } from '../lib/api'
+import { getElasticsearchStatus, retryElasticsearchSync } from '../lib/api'
 import { Modal } from '../components/ui/Modal'
 import { useToast } from '../hooks/useToast'
 import { 
@@ -15,7 +16,10 @@ import {
   DocumentIcon, 
   CloudArrowUpIcon,
   ChartBarIcon,
-  ClockIcon
+  ClockIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline'
 
 // WebSocket URL helper
@@ -47,6 +51,11 @@ export default function FilesPage() {
   const [detailsRows, setDetailsRows] = useState<Array<Record<string, unknown>>>([])
   const [detailsTotalPages, setDetailsTotalPages] = useState(1)
   const [detailsLoading, setDetailsLoading] = useState(false)
+  const [esSyncStatus, setEsSyncStatus] = useState<Record<number, {
+    status: 'synced' | 'failed' | 'pending' | 'syncing'
+    error?: string
+  }>>({})
+  const [retryingSync, setRetryingSync] = useState<Set<number>>(new Set())
 
   async function openDetails(fileId: number) {
     console.log('Opening details for file:', fileId, 'token:', token ? 'present' : 'missing')
@@ -95,6 +104,76 @@ export default function FilesPage() {
     }
   }
 
+  async function loadEsSyncStatus(fileId: number) {
+    try {
+      const status = await getElasticsearchStatus(fileId)
+      setEsSyncStatus(prev => ({
+        ...prev,
+        [fileId]: {
+          status: status.status,
+          error: status.elasticsearch_sync_error || undefined
+        }
+      }))
+    } catch (e) {
+      console.error('Error loading ES sync status:', e)
+      setEsSyncStatus(prev => ({
+        ...prev,
+        [fileId]: {
+          status: 'failed',
+          error: 'Failed to load status'
+        }
+      }))
+    }
+  }
+
+  async function handleRetryEsSync(fileId: number) {
+    setRetryingSync(prev => new Set(prev).add(fileId))
+    try {
+      await retryElasticsearchSync(fileId)
+      showToast('Elasticsearch sync started in background', 'success')
+      
+      // Update status to syncing
+      setEsSyncStatus(prev => ({
+        ...prev,
+        [fileId]: {
+          status: 'syncing',
+          error: undefined
+        }
+      }))
+      
+      // Poll for status update
+      const pollStatus = async () => {
+        try {
+          const status = await getElasticsearchStatus(fileId)
+          setEsSyncStatus(prev => ({
+            ...prev,
+            [fileId]: {
+              status: status.status,
+              error: status.elasticsearch_sync_error || undefined
+            }
+          }))
+          
+          if (status.status === 'syncing') {
+            setTimeout(pollStatus, 2000) // Poll every 2 seconds
+          }
+        } catch (e) {
+          console.error('Error polling ES sync status:', e)
+        }
+      }
+      
+      setTimeout(pollStatus, 2000)
+    } catch (e) {
+      console.error('Error retrying ES sync:', e)
+      showToast('Failed to start Elasticsearch sync', 'error')
+    } finally {
+      setRetryingSync(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(fileId)
+        return newSet
+      })
+    }
+  }
+
   useEffect(() => {
     loadFiles()
   }, [loadFiles])
@@ -106,6 +185,15 @@ export default function FilesPage() {
       console.log('First file ID:', files[0]?.id)
     }
   }, [files])
+
+  // Load ES sync status for processed files
+  useEffect(() => {
+    files.forEach(file => {
+      if (file.status === 'processed' && !esSyncStatus[file.id]) {
+        loadEsSyncStatus(file.id)
+      }
+    })
+  }, [files, esSyncStatus])
 
   // Connect to websockets for files that are processing
   useEffect(() => {
@@ -326,6 +414,60 @@ export default function FilesPage() {
                       {file.status}
                     </span>
                   </div>
+                  
+                  {/* Elasticsearch Sync Status */}
+                  {file.status === 'processed' && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">Elasticsearch:</span>
+                      <div className="flex items-center gap-1">
+                        {esSyncStatus[file.id]?.status === 'synced' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <CheckCircleIcon className="w-3 h-3" />
+                            Synced
+                          </span>
+                        )}
+                        {esSyncStatus[file.id]?.status === 'failed' && (
+                          <div className="flex items-center gap-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              <XCircleIcon className="w-3 h-3" />
+                              Failed
+                            </span>
+                            <Button
+                              variant="secondary"
+                              onClick={() => handleRetryEsSync(file.id)}
+                              disabled={retryingSync.has(file.id)}
+                              className="text-xs px-2 py-1 h-6"
+                              title={esSyncStatus[file.id]?.error || 'Retry sync'}
+                            >
+                              {retryingSync.has(file.id) ? (
+                                <Spinner size={12} />
+                              ) : (
+                                <ArrowPathIcon className="w-3 h-3" />
+                              )}
+                            </Button>
+                          </div>
+                        )}
+                        {esSyncStatus[file.id]?.status === 'pending' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                            <ClockIcon className="w-3 h-3" />
+                            Pending
+                          </span>
+                        )}
+                        {esSyncStatus[file.id]?.status === 'syncing' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            <Spinner size={12} />
+                            Syncing...
+                          </span>
+                        )}
+                        {!esSyncStatus[file.id] && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                            <ClockIcon className="w-3 h-3" />
+                            Loading...
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
