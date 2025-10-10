@@ -8,9 +8,39 @@ import { getFileStatus, testUpload, uploadFile, wsUrl, resetStuckFile } from '..
 import { useDatasets, type Dataset } from '../store/datasets'
 import { useToast } from '../hooks/useToast'
 
+interface UploadProgressData {
+  fileId: number
+  filename: string
+  status: 'uploading' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  progress: number
+  totalRows?: number
+  processedRows?: number
+  currentChunk?: number
+  totalChunks?: number
+  uploadSpeed?: number
+  estimatedTime?: number
+  error?: string
+  details?: {
+    elasticsearchSynced?: boolean
+    googleCloudSearchSynced?: boolean
+    bulkSearchReady?: boolean
+    processingStage?: string
+  }
+}
+
 export default function UploadPage() {
   const fileInput = useRef<HTMLInputElement>(null)
   const uploadAbortRef = useRef<AbortController | null>(null)
+  const websockets = useRef<Map<number, WebSocket>>(new Map())
+  const abortControllers = useRef<Map<number, AbortController>>(new Map())
+  
+  // Upload management state
+  const [uploads, setUploads] = useState<Map<number, UploadProgressData>>(new Map())
+  const [activeUploads, setActiveUploads] = useState<number[]>([])
+  const [completedUploads, setCompletedUploads] = useState<number[]>([])
+  const [failedUploads, setFailedUploads] = useState<number[]>([])
+  
+  // Legacy state for backward compatibility
   const [fileId, setFileId] = useState<number>()
   const [progress, setProgress] = useState<string>('-')
   const [progressDetails, setProgressDetails] = useState<{
@@ -36,29 +66,24 @@ export default function UploadPage() {
     }
     
     setUploading(true)
-    uploadAbortRef.current = new AbortController()
     setError(undefined)
+    
     try {
-      const meta = await uploadFile(f, uploadAbortRef.current.signal)
-      setFileId(meta.id)
-      // persist tracking so we can resume progress if user navigates away
+      // Use the new tracking system
+      const fileId = await startUploadWithTracking(f)
+      
+      // Also update legacy state for backward compatibility
+      setFileId(fileId)
       try { 
-        localStorage.setItem('upload_tracking_file_id', String(meta.id)) 
+        localStorage.setItem('upload_tracking_file_id', String(fileId)) 
       } catch {
         // Ignore localStorage errors
       }
-      // Cast minimal upload response into Dataset shape for local state
-      const ds: Dataset = {
-        id: meta.id,
-        filename: meta.filename,
-        status: meta.status,
-        size_bytes: meta.size_bytes,
-        content_type: f.type || 'application/octet-stream',
-        rows_count: 0,
+      
+      // Clear file input
+      if (fileInput.current) {
+        fileInput.current.value = ''
       }
-      addFile(ds)
-      connectWs(meta.id)
-      showToast(`File "${meta.filename}" uploaded successfully!`, 'success')
     } catch (err: unknown) {
       let errorMsg = 'Upload failed'
       if (err && typeof err === 'object' && 'response' in err) {
@@ -79,7 +104,6 @@ export default function UploadPage() {
       showToast(errorMsg, 'error')
     } finally {
       setUploading(false)
-      uploadAbortRef.current = null
     }
   }
 
@@ -216,34 +240,34 @@ export default function UploadPage() {
   // On mount, resume tracking if a file id was stored earlier
   useEffect(() => {
     const checkFileStatusAndResume = async (id: number) => {
-      try {
-        const status = await getFileStatus(id)
-        if (status.status === 'processing') {
-          setFileId(id)
-          setProgress('resuming...')
-          connectWs(id)
-        } else if (status.status === 'processed') {
-          // File is already processed, show option to go to query or upload new
-          setFileId(id)
-          setProgress('already processed - ready for new upload or go to query')
-          showToast('File already processed. You can upload a new file or go to query page.', 'info')
-        } else if (status.status === 'failed') {
-          // File failed, clear the tracking and allow new uploads
-          localStorage.removeItem('upload_tracking_file_id')
-          setProgress('previous upload failed - ready for new upload')
-          showToast('Previous upload failed. You can now upload a new file.', 'warning')
-        } else {
-          // Unknown status, clear tracking
-          localStorage.removeItem('upload_tracking_file_id')
-          setProgress('ready for upload')
-        }
-      } catch (error) {
-        // File not found or error, clear tracking
+    try {
+      const status = await getFileStatus(id)
+      if (status.status === 'processing') {
+        setFileId(id)
+        setProgress('resuming...')
+        connectWs(id)
+      } else if (status.status === 'processed') {
+        // File is already processed, show option to go to query or upload new
+        setFileId(id)
+        setProgress('already processed - ready for new upload or go to query')
+        showToast('File already processed. You can upload a new file or go to query page.', 'info')
+      } else if (status.status === 'failed') {
+        // File failed, clear the tracking and allow new uploads
+        localStorage.removeItem('upload_tracking_file_id')
+        setProgress('previous upload failed - ready for new upload')
+        showToast('Previous upload failed. You can now upload a new file.', 'warning')
+      } else {
+        // Unknown status, clear tracking
         localStorage.removeItem('upload_tracking_file_id')
         setProgress('ready for upload')
-        console.warn('Could not check file status:', error)
       }
+    } catch (error) {
+      // File not found or error, clear tracking
+      localStorage.removeItem('upload_tracking_file_id')
+      setProgress('ready for upload')
+      console.warn('Could not check file status:', error)
     }
+  }
 
     try {
       const saved = localStorage.getItem('upload_tracking_file_id')
@@ -272,6 +296,239 @@ export default function UploadPage() {
       window.removeEventListener('beforeunload', beforeUnload as EventListener)
     }
   }, [uploading])
+
+  // Upload management functions
+  const startUploadWithTracking = useCallback(async (file: File) => {
+    const abortController = new AbortController()
+    const tempFileId = Date.now() // Temporary ID until we get the real one
+    
+    // Create initial upload state
+    const uploadData: UploadProgressData = {
+      fileId: tempFileId,
+      filename: file.name,
+      status: 'uploading',
+      progress: 0,
+      currentChunk: 0,
+      totalChunks: Math.ceil(file.size / (20 * 1024 * 1024)) // Estimate chunks
+    }
+    
+    setUploads(prev => new Map(prev).set(tempFileId, uploadData))
+    setActiveUploads(prev => [...prev, tempFileId])
+    abortControllers.current.set(tempFileId, abortController)
+    
+    try {
+      const result = await uploadFile(file, abortController.signal)
+      
+      // Update with real file ID
+      setUploads(prev => {
+        const newUploads = new Map(prev)
+        const current = newUploads.get(tempFileId)
+        if (current) {
+          newUploads.delete(tempFileId)
+          newUploads.set(result.id, { ...current, fileId: result.id, status: 'processing', progress: 100 })
+        }
+        return newUploads
+      })
+      setActiveUploads(prev => prev.map(id => id === tempFileId ? result.id : id))
+      
+      // Add to datasets
+      addFile({
+        id: result.id,
+        filename: result.filename,
+        status: result.status,
+        size_bytes: result.size_bytes,
+        content_type: file.type || 'application/octet-stream',
+        rows_count: 0
+      })
+      
+      // Connect to WebSocket for processing updates
+      connectWebSocket(result.id)
+      
+      showToast(`File "${result.filename}" uploaded successfully!`, 'success')
+      return result.id
+    } catch (error) {
+      // Handle upload failure
+      setUploads(prev => {
+        const newUploads = new Map(prev)
+        const current = newUploads.get(tempFileId)
+        if (current) {
+          newUploads.set(tempFileId, {
+            ...current,
+            status: 'failed',
+            error: error instanceof Error ? error.message : 'Upload failed'
+          })
+        }
+        return newUploads
+      })
+      setActiveUploads(prev => prev.filter(id => id !== tempFileId))
+      setFailedUploads(prev => [...prev, tempFileId])
+      
+      showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+      throw error
+    } finally {
+      abortControllers.current.delete(tempFileId)
+    }
+  }, [addFile, showToast])
+
+  // Connect to WebSocket for a file
+  const connectWebSocket = useCallback((fileId: number) => {
+    if (websockets.current.has(fileId)) {
+      return // Already connected
+    }
+
+    const socket = new WebSocket(wsUrl(`/api/v1/ws/${fileId}`))
+    
+    socket.onopen = () => {
+      console.log(`WebSocket connected for file ${fileId}`)
+    }
+    
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type && data.file_id === fileId) {
+          updateUploadProgress(fileId, {
+            status: data.type === 'processing_complete' ? 'completed' : 'processing',
+            progress: data.percentage || 100,
+            totalRows: data.total_rows,
+            processedRows: data.processed_rows,
+            details: {
+              elasticsearchSynced: data.elasticsearch_synced,
+              googleCloudSearchSynced: data.google_cloud_search_synced,
+              bulkSearchReady: data.bulk_search_ready,
+              processingStage: data.processing_stage
+            }
+          })
+
+          if (data.type === 'processing_complete') {
+            // Mark as completed
+            setActiveUploads(prev => prev.filter(id => id !== fileId))
+            setCompletedUploads(prev => [...prev, fileId])
+            
+            // Close websocket
+            socket.close()
+            websockets.current.delete(fileId)
+            
+            showToast(`File processing completed!`, 'success')
+          }
+        }
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error)
+      }
+    }
+    
+    socket.onerror = (error) => {
+      console.error(`WebSocket error for file ${fileId}:`, error)
+      socket.close()
+      websockets.current.delete(fileId)
+    }
+    
+    socket.onclose = () => {
+      console.log(`WebSocket closed for file ${fileId}`)
+      websockets.current.delete(fileId)
+    }
+    
+    websockets.current.set(fileId, socket)
+  }, [showToast])
+
+  // Update upload progress
+  const updateUploadProgress = useCallback((fileId: number, updates: Partial<UploadProgressData>) => {
+    setUploads(prev => {
+      const newUploads = new Map(prev)
+      const current = newUploads.get(fileId)
+      if (current) {
+        newUploads.set(fileId, { ...current, ...updates })
+      }
+      return newUploads
+    })
+  }, [])
+
+  // Cancel an upload
+  const cancelUpload = useCallback((fileId: number) => {
+    const abortController = abortControllers.current.get(fileId)
+    if (abortController) {
+      abortController.abort()
+      abortControllers.current.delete(fileId)
+    }
+    
+    // Close WebSocket
+    const socket = websockets.current.get(fileId)
+    if (socket) {
+      socket.close()
+      websockets.current.delete(fileId)
+    }
+    
+    setUploads(prev => {
+      const newUploads = new Map(prev)
+      const current = newUploads.get(fileId)
+      if (current) {
+        newUploads.set(fileId, { ...current, status: 'cancelled' })
+      }
+      return newUploads
+    })
+    
+    setActiveUploads(prev => prev.filter(id => id !== fileId))
+    showToast('Upload cancelled', 'info')
+  }, [showToast])
+
+  // Remove an upload from the list
+  const removeUpload = useCallback((fileId: number) => {
+    setUploads(prev => {
+      const newUploads = new Map(prev)
+      newUploads.delete(fileId)
+      return newUploads
+    })
+    setActiveUploads(prev => prev.filter(id => id !== fileId))
+    setCompletedUploads(prev => prev.filter(id => id !== fileId))
+    setFailedUploads(prev => prev.filter(id => id !== fileId))
+  }, [])
+
+  // Load persisted uploads from localStorage on mount
+  useEffect(() => {
+    try {
+      const persisted = localStorage.getItem('active_uploads')
+      if (persisted) {
+        const data = JSON.parse(persisted)
+        setUploads(new Map(data.uploads))
+        setActiveUploads(data.activeUploads || [])
+        setCompletedUploads(data.completedUploads || [])
+        setFailedUploads(data.failedUploads || [])
+        
+        // Reconnect to websockets for active uploads
+        data.activeUploads?.forEach((fileId: number) => {
+          connectWebSocket(fileId)
+        })
+      }
+    } catch (error) {
+      console.error('Failed to load persisted uploads:', error)
+    }
+  }, [connectWebSocket])
+
+  // Persist state to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('active_uploads', JSON.stringify({
+        uploads: Array.from(uploads.entries()),
+        activeUploads,
+        completedUploads,
+        failedUploads
+      }))
+    } catch (error) {
+      console.error('Failed to persist upload state:', error)
+    }
+  }, [uploads, activeUploads, completedUploads, failedUploads])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Abort all active uploads
+      abortControllers.current.forEach(controller => controller.abort())
+      abortControllers.current.clear()
+      
+      // Close all WebSockets
+      websockets.current.forEach(socket => socket.close())
+      websockets.current.clear()
+    }
+  }, [])
 
   return (
     <div className="space-y-4">
@@ -372,6 +629,222 @@ export default function UploadPage() {
           {error && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md">
               <div className="text-sm text-red-600">{String(error)}</div>
+            </div>
+          )}
+
+          {/* Enhanced Upload Progress Tracking */}
+          {Array.from(uploads.values()).length > 0 && (
+            <div className="mt-6 space-y-4">
+              <h3 className="text-lg font-medium text-gray-900">Upload Progress</h3>
+              
+              {/* Active Uploads */}
+              {activeUploads.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-blue-600">Active Uploads ({activeUploads.length})</h4>
+                  {activeUploads.map(fileId => {
+                    const upload = uploads.get(fileId)
+                    if (!upload) return null
+                    
+                    return (
+                      <div key={fileId} className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">
+                              {upload.status === 'uploading' ? '📤' : '⚙️'}
+                            </span>
+                            <div>
+                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
+                                {upload.filename}
+                              </h5>
+                              <p className="text-sm font-medium text-blue-600">
+                                {upload.status.charAt(0).toUpperCase() + upload.status.slice(1)}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <Button
+                            variant="outline"
+                            onClick={() => cancelUpload(fileId)}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="mb-3">
+                          <div className="flex justify-between text-sm text-gray-600 mb-1">
+                            <span>Progress</span>
+                            <span>{Math.round(upload.progress)}%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2">
+                            <div
+                              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                              style={{ width: `${upload.progress}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Upload Details */}
+                        {upload.status === 'uploading' && (
+                          <div className="space-y-2 text-sm text-gray-600">
+                            {upload.currentChunk && upload.totalChunks && (
+                              <div className="flex justify-between">
+                                <span>Chunk Progress:</span>
+                                <span>{upload.currentChunk}/{upload.totalChunks}</span>
+                              </div>
+                            )}
+                            {upload.uploadSpeed && (
+                              <div className="flex justify-between">
+                                <span>Upload Speed:</span>
+                                <span>{(upload.uploadSpeed / (1024*1024)).toFixed(1)}MB/s</span>
+                              </div>
+                            )}
+                            {upload.estimatedTime && (
+                              <div className="flex justify-between">
+                                <span>Estimated Time:</span>
+                                <span>{Math.round(upload.estimatedTime)}s</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Processing Details */}
+                        {upload.status === 'processing' && (
+                          <div className="space-y-2 text-sm text-gray-600">
+                            {upload.processedRows && upload.totalRows && (
+                              <div className="flex justify-between">
+                                <span>Rows Processed:</span>
+                                <span>{upload.processedRows.toLocaleString()}/{upload.totalRows.toLocaleString()}</span>
+                              </div>
+                            )}
+                            {upload.details?.processingStage && (
+                              <div className="flex justify-between">
+                                <span>Stage:</span>
+                                <span className="capitalize">{upload.details.processingStage}</span>
+                              </div>
+                            )}
+                            {upload.details?.elasticsearchSynced !== undefined && (
+                              <div className="flex justify-between">
+                                <span>Elasticsearch:</span>
+                                <span className={upload.details.elasticsearchSynced ? 'text-green-600' : 'text-yellow-600'}>
+                                  {upload.details.elasticsearchSynced ? 'Synced' : 'Syncing...'}
+                                </span>
+                              </div>
+                            )}
+                            {upload.details?.bulkSearchReady && (
+                              <div className="flex justify-between">
+                                <span>Bulk Search:</span>
+                                <span className="text-green-600">Ready</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Loading Spinner */}
+                        <div className="flex items-center justify-center mt-3">
+                          <Spinner size={16} />
+                          <span className="ml-2 text-sm text-gray-600">
+                            {upload.status === 'uploading' ? 'Uploading...' : 'Processing...'}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Completed Uploads */}
+              {completedUploads.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-green-600">Completed Uploads ({completedUploads.length})</h4>
+                  {completedUploads.map(fileId => {
+                    const upload = uploads.get(fileId)
+                    if (!upload) return null
+                    
+                    return (
+                      <div key={fileId} className="border border-green-200 rounded-lg p-4 bg-green-50">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">✅</span>
+                            <div>
+                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
+                                {upload.filename}
+                              </h5>
+                              <p className="text-sm font-medium text-green-600">Completed</p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={() => navigate(`/query?fileId=${fileId}`)}
+                              className="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1"
+                            >
+                              View Results
+                            </Button>
+                            <Button
+                              variant="outline"
+                              onClick={() => removeUpload(fileId)}
+                              className="text-gray-600 hover:text-gray-700 text-sm px-3 py-1"
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+
+                        {upload.totalRows && (
+                          <div className="text-sm text-green-800">
+                            {upload.totalRows.toLocaleString()} rows processed successfully!
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Failed Uploads */}
+              {failedUploads.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-red-600">Failed Uploads ({failedUploads.length})</h4>
+                  {failedUploads.map(fileId => {
+                    const upload = uploads.get(fileId)
+                    if (!upload) return null
+                    
+                    return (
+                      <div key={fileId} className="border border-red-200 rounded-lg p-4 bg-red-50">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">❌</span>
+                            <div>
+                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
+                                {upload.filename}
+                              </h5>
+                              <p className="text-sm font-medium text-red-600">Failed</p>
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              onClick={() => removeUpload(fileId)}
+                              className="text-gray-600 hover:text-gray-700 text-sm px-3 py-1"
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+
+                        {upload.error && (
+                          <div className="text-sm text-red-800">
+                            Error: {upload.error}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
           

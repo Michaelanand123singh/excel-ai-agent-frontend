@@ -312,18 +312,41 @@ export async function login(username: string, password: string) {
 }
 
 export async function uploadFile(file: File, signal?: AbortSignal) {
-  // For large files, perform chunked upload to bypass Cloud Run limits
-  const CHUNK_SIZE = 20 * 1024 * 1024 // 20MB chunks (reduced number of requests)
-  const isLarge = file.size > CHUNK_SIZE
-  if (!isLarge) {
+  // Use unified upload endpoint - backend will automatically handle routing
   const form = new FormData()
   form.append('file', file)
+  
+  try {
     const res = await uploadApi.post('/api/v1/upload', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    signal,
-  })
-  return res.data as { id: number; filename: string; status: string; size_bytes: number }
+      headers: { 'Content-Type': 'multipart/form-data' },
+      signal,
+    })
+    
+    // Check if backend requires chunked upload for large files
+    if (res.data.requires_chunked_upload) {
+      console.log('Large file detected, switching to chunked upload...')
+      console.log(`File size: ${(res.data.file_size / (1024*1024)).toFixed(1)}MB`)
+      console.log(`Estimated chunks: ${res.data.estimated_chunks}`)
+      console.log(`Chunk size: ${(res.data.max_chunk_size / (1024*1024)).toFixed(1)}MB`)
+      return await uploadFileChunked(file, signal, res.data.max_chunk_size)
+    }
+    
+    // Small file processed directly
+    return res.data as { id: number; filename: string; status: string; size_bytes: number }
+  } catch (error) {
+    // If unified upload fails, fall back to chunked upload
+    console.log('Unified upload failed, falling back to chunked upload...')
+    return await uploadFileChunked(file, signal)
   }
+}
+
+async function uploadFileChunked(file: File, signal?: AbortSignal, chunkSize?: number) {
+  // Intelligent chunked upload for large files
+  // Use provided chunk size or determine optimal size based on file size
+  const CHUNK_SIZE = chunkSize || (file.size >= 100 * 1024 * 1024 ? 50 * 1024 * 1024 : 20 * 1024 * 1024)
+  
+  console.log(`Using chunk size: ${CHUNK_SIZE / (1024*1024)}MB for file size: ${(file.size / (1024*1024)).toFixed(1)}MB`)
+  
   // 1) init
   const initRes = await uploadApi.post('/api/v1/upload/multipart/init', {
     filename: file.name,
@@ -331,8 +354,11 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
     total_size: file.size,
   }, { signal })
   const { upload_id, file_id } = initRes.data as { upload_id: string; file_id: number }
+  
   // 2) send parts
   const totalParts = Math.ceil(file.size / CHUNK_SIZE)
+  console.log(`Uploading ${totalParts} chunks of ${CHUNK_SIZE / (1024*1024)}MB each`)
+  
   for (let part = 0; part < totalParts; part++) {
     const start = part * CHUNK_SIZE
     const end = Math.min(start + CHUNK_SIZE, file.size)
@@ -341,7 +367,8 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
     const bytes = new Uint8Array(arrayBuffer)
     
     // Add progress logging
-    console.log(`Uploading chunk ${part + 1}/${totalParts} (${Math.round((part + 1) / totalParts * 100)}%)`)
+    const progress = Math.round((part + 1) / totalParts * 100)
+    console.log(`Uploading chunk ${part + 1}/${totalParts} (${progress}%) - ${(bytes.length / (1024*1024)).toFixed(1)}MB`)
     
     await uploadApi.post(`/api/v1/upload/multipart/part`, bytes, {
       headers: { 'Content-Type': 'application/octet-stream' },
@@ -349,7 +376,9 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
       signal,
     })
   }
+  
   // 3) complete
+  console.log('Completing chunked upload...')
   const completeRes = await uploadApi.post('/api/v1/upload/multipart/complete', { upload_id }, { signal })
   return { id: file_id, filename: file.name, status: completeRes.data.status, size_bytes: completeRes.data.size_bytes }
 }
