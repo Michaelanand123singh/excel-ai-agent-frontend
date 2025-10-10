@@ -195,6 +195,19 @@ export default function FilesPage() {
     })
   }, [files, esSyncStatus])
 
+  // Periodic refresh of ES sync status for processed files
+  useEffect(() => {
+    const interval = setInterval(() => {
+      files.forEach(file => {
+        if (file.status === 'processed' && esSyncStatus[file.id]?.status === 'pending') {
+          loadEsSyncStatus(file.id)
+        }
+      })
+    }, 5000) // Check every 5 seconds
+
+    return () => clearInterval(interval)
+  }, [files, esSyncStatus])
+
   // Connect to websockets for files that are processing
   useEffect(() => {
     const currentWebsockets = websocketsRef.current
@@ -228,6 +241,17 @@ export default function FilesPage() {
                   percentage: data.percentage || 0
                 }
               }))
+
+              // Handle Elasticsearch sync status updates
+              if (data.type === 'elasticsearch_sync_complete') {
+                setEsSyncStatus(prev => ({
+                  ...prev,
+                  [file.id]: {
+                    status: data.elasticsearch_synced ? 'synced' : 'failed',
+                    error: data.elasticsearch_sync_error || undefined
+                  }
+                }))
+              }
 
               // If processing is complete, close the websocket
               if (data.type === 'processing_complete') {
