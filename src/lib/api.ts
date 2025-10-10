@@ -40,7 +40,7 @@ const getApiBaseUrl = () => {
     const host = window.location.host
     // Don't use frontend origin for API calls
     if (!/excel-ai-agent-frontend-/.test(host)) {
-      return window.location.origin
+    return window.location.origin
     }
   }
 
@@ -80,11 +80,18 @@ export const api = axios.create({
   timeout: API_TIMEOUT,
 })
 
+// Separate API instance for uploads without timeout
+export const uploadApi = axios.create({
+  baseURL: API_BASE,
+  // No timeout for uploads
+})
+
 export function setRuntimeApiBase(url?: string) {
   if (typeof window === 'undefined') return
   if (url && url.trim()) {
     window.__API_BASE_URL__ = url.trim()
     api.defaults.baseURL = url.trim()
+    uploadApi.defaults.baseURL = url.trim()
     console.info('Runtime API base updated to:', url.trim())
   }
 }
@@ -207,11 +214,95 @@ api.interceptors.response.use(
   }
 )
 
+// Add the same interceptors to uploadApi (but without timeout retry logic)
+uploadApi.interceptors.request.use((config) => {
+  const requestId = rid()
+  config.headers = config.headers || {}
+  ;(config.headers as Record<string, string>)['X-Request-Id'] = requestId
+  config._meta = { requestId, startedAtMs: Date.now() }
+
+  const key = requestKey(config)
+  const now = Date.now()
+  const last = recentCalls.get(key)
+  if (last && now - last < 1000) {
+    console.warn(`API duplicate within 1s [${requestId}]`, { key, sinceMs: now - last, config })
+  }
+  recentCalls.set(key, now)
+
+  // 401 cooldown: short-circuit optional
+  if (now - lastAuthErrorAt < AUTH_COOLDOWN_MS) {
+    // Cancel this request to prevent auth flood
+    return Promise.reject(new axios.Cancel(`auth_cooldown: skipping request ${key}`))
+  }
+
+  // In-flight deduplication: cancel new identical requests while one is pending
+  if (!config.signal) {
+    const existing = inflight.get(key)
+    if (existing) {
+      const controller = new AbortController()
+      config.signal = controller.signal
+      controller.abort(`deduped: ${key}`)
+    } else {
+      const controller = new AbortController()
+      config.signal = controller.signal
+      inflight.set(key, controller)
+    }
+  }
+
+  console.groupCollapsed(`%cUPLOAD → ${config.method?.toUpperCase() || 'GET'} ${config.baseURL}${config.url} [${requestId}]`, 'color:#0ea5e9')
+  console.info('Request', { headers: config.headers, params: config.params, data: config.data })
+  console.groupEnd()
+  return config
+})
+
+uploadApi.interceptors.response.use(
+  (response) => {
+    const meta = response.config._meta
+    const requestId = meta?.requestId || 'unknown'
+    const durationMs = meta ? Date.now() - meta.startedAtMs : undefined
+    const key = requestKey(response.config)
+    recentCalls.delete(key)
+    const ctrl = inflight.get(key)
+    if (ctrl) inflight.delete(key)
+
+    console.groupCollapsed(`%cUPLOAD ← ${response.config.method?.toUpperCase() || 'GET'} ${response.config.baseURL}${response.config.url} [${requestId}] ${durationMs !== undefined ? `in ${durationMs}ms` : ''}`,'color:#10b981')
+    console.info('Status', response.status, response.statusText)
+    console.info('Response', response.data)
+    console.groupEnd()
+    return response
+  },
+  (error) => {
+    const cfg = error.config as import('axios').AxiosRequestConfig | undefined
+    const meta = cfg?._meta
+    const requestId = meta?.requestId || 'unknown'
+    const durationMs = meta ? Date.now() - meta.startedAtMs : undefined
+    const key = cfg ? requestKey(cfg) : undefined
+    if (key) recentCalls.delete(key)
+    if (key) {
+      const ctrl = inflight.get(key)
+      if (ctrl) inflight.delete(key)
+    }
+
+    console.groupCollapsed(`%cUPLOAD ✕ ${cfg?.method?.toUpperCase() || 'GET'} ${cfg?.baseURL || ''}${cfg?.url || ''} [${requestId}] ${durationMs !== undefined ? `in ${durationMs}ms` : ''}`,'color:#ef4444')
+    console.error('Error', error?.response?.status, error?.response?.data || error.message)
+    console.info('Request', { headers: cfg?.headers, params: cfg?.params, data: cfg?.data })
+    console.groupEnd()
+
+    if (error.response?.status === 401) {
+      lastAuthErrorAt = Date.now()
+    }
+
+    return Promise.reject(error)
+  }
+)
+
 export function setAuthToken(token?: string) {
   if (token) {
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    uploadApi.defaults.headers.common['Authorization'] = `Bearer ${token}`
   } else {
     delete api.defaults.headers.common['Authorization']
+    delete uploadApi.defaults.headers.common['Authorization']
   }
 }
 
@@ -225,16 +316,16 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
   const CHUNK_SIZE = 20 * 1024 * 1024 // 20MB chunks (reduced number of requests)
   const isLarge = file.size > CHUNK_SIZE
   if (!isLarge) {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await api.post('/api/v1/upload', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      signal,
-    })
-    return res.data as { id: number; filename: string; status: string; size_bytes: number }
+  const form = new FormData()
+  form.append('file', file)
+    const res = await uploadApi.post('/api/v1/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
+  })
+  return res.data as { id: number; filename: string; status: string; size_bytes: number }
   }
   // 1) init
-  const initRes = await api.post('/api/v1/upload/multipart/init', {
+  const initRes = await uploadApi.post('/api/v1/upload/multipart/init', {
     filename: file.name,
     content_type: file.type || 'application/octet-stream',
     total_size: file.size,
@@ -252,14 +343,14 @@ export async function uploadFile(file: File, signal?: AbortSignal) {
     // Add progress logging
     console.log(`Uploading chunk ${part + 1}/${totalParts} (${Math.round((part + 1) / totalParts * 100)}%)`)
     
-    await api.post(`/api/v1/upload/multipart/part`, bytes, {
+    await uploadApi.post(`/api/v1/upload/multipart/part`, bytes, {
       headers: { 'Content-Type': 'application/octet-stream' },
       params: { upload_id, part_number: part + 1, total_parts: totalParts },
       signal,
     })
   }
   // 3) complete
-  const completeRes = await api.post('/api/v1/upload/multipart/complete', { upload_id }, { signal })
+  const completeRes = await uploadApi.post('/api/v1/upload/multipart/complete', { upload_id }, { signal })
   return { id: file_id, filename: file.name, status: completeRes.data.status, size_bytes: completeRes.data.size_bytes }
 }
 
