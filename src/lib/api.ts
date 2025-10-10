@@ -691,3 +691,117 @@ export async function getFileRows(fileId: number, page = 1, pageSize = 100) {
     rows: Array<Record<string, unknown>>
   }
 }
+
+// All Files Search API functions
+export async function searchAllFilesText(partNumbers: string[], searchMode = 'hybrid', page = 1, pageSize = 100) {
+  const res = await api.post('/api/v1/query-all-files/search-all-files-text', {
+    part_numbers: partNumbers,
+    search_mode: searchMode,
+    page,
+    page_size: pageSize
+  })
+  return res.data as {
+    results: Record<string, {
+      companies: Array<{
+        file_id: number
+        company_name: string
+        contact_details: string
+        email: string
+        quantity: number
+        unit_price: number
+        item_description: string
+        part_number: string
+        uqc: string
+        secondary_buyer: string
+        secondary_buyer_contact: string
+        secondary_buyer_email: string
+        confidence: number
+        match_type: string
+        match_status: string
+        confidence_breakdown: {
+          part_number: { score: number; method: string; details: string }
+          description: { score: number; method: string; details: string }
+          manufacturer: { score: number; method: string; details: string }
+          length_penalty: number
+        }
+      }>
+      total_matches: number
+      match_type: string
+    }>
+    total_parts: number
+    total_matches: number
+    search_engine: string
+    latency_ms: number
+    cached: boolean
+    cache_hit?: boolean
+    synced_files_count?: number
+    message?: string
+  }
+}
+
+export async function searchAllFilesExcel(file: File, searchMode = 'hybrid', page = 1, pageSize = 100) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('search_mode', searchMode)
+  formData.append('page', page.toString())
+  formData.append('page_size', pageSize.toString())
+  
+  const res = await uploadApi.post('/api/v1/query-all-files/search-all-files-excel', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+  return res.data as {
+    results: Record<string, {
+      companies: Array<{
+        file_id: number
+        company_name: string
+        contact_details: string
+        email: string
+        quantity: number
+        unit_price: number
+        item_description: string
+        part_number: string
+        uqc: string
+        secondary_buyer: string
+        secondary_buyer_contact: string
+        secondary_buyer_email: string
+        confidence: number
+        match_type: string
+        match_status: string
+        confidence_breakdown: {
+          part_number: { score: number; method: string; details: string }
+          description: { score: number; method: string; details: string }
+          manufacturer: { score: number; method: string; details: string }
+          length_penalty: number
+        }
+      }>
+      total_matches: number
+      match_type: string
+    }>
+    total_parts: number
+    total_matches: number
+    search_engine: string
+    latency_ms: number
+    cached: boolean
+    cache_hit?: boolean
+    synced_files_count?: number
+    message?: string
+  }
+}
+
+export async function getAllFilesStatus() {
+  const res = await api.get('/api/v1/query-all-files/all-files-status')
+  return res.data as {
+    total_files: number
+    synced_files: number
+    files: Array<{
+      id: number
+      filename: string
+      status: string
+      elasticsearch_synced: boolean
+      elasticsearch_sync_error: string | null
+      rows_count: number
+    }>
+  }
+}

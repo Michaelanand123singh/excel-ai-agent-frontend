@@ -5,7 +5,7 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { SearchResults } from '../components/SearchResults'
 import { QueryResults } from '../components/QueryResults'
-import { queryDataset, searchPartNumber, searchBulkExcelUpload, searchPartNumberBulkChunked } from '../lib/api'
+import { queryDataset, searchPartNumber, searchBulkExcelUpload, searchPartNumberBulkChunked, searchAllFilesText, searchAllFilesExcel, getAllFilesStatus } from '../lib/api'
 import { useSearchParams } from 'react-router-dom'
 import { useToast } from '../hooks/useToast'
 import * as XLSX from 'xlsx'
@@ -78,7 +78,15 @@ export default function QueryPage() {
   const [searchMode, setSearchMode] = useState<'exact' | 'fuzzy' | 'hybrid'>('hybrid')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [activeTab, setActiveTab] = useState<'query' | 'part'>('query')
+  // All Files Search state
+  const [allFilesBulkInput, setAllFilesBulkInput] = useState('')
+  const [allFilesBulkResults, setAllFilesBulkResults] = useState<Record<string, BulkEntry> | null>(null)
+  const [allFilesBulkProgress, setAllFilesBulkProgress] = useState<{ completed: number; total: number; current: string } | null>(null)
+  const [allFilesBulkUploading, setAllFilesBulkUploading] = useState(false)
+  const [allFilesStatus, setAllFilesStatus] = useState<{ total_files: number; synced_files: number; files: Array<{ id: number; filename: string; status: string; elasticsearch_synced: boolean; elasticsearch_sync_error: string | null; rows_count: number }> } | null>(null)
+  const allFilesFileInputRef = useRef<HTMLInputElement>(null)
+
+  const [activeTab, setActiveTab] = useState<'query' | 'part' | 'all-files'>('query')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
   const [params] = useSearchParams()
@@ -341,6 +349,108 @@ export default function QueryPage() {
     }
   }, [fileId, bulkInput, searchMode, showToast, checkAuth]);
 
+  // All Files Search Functions
+  const loadAllFilesStatus = useCallback(async () => {
+    try {
+      const status = await getAllFilesStatus();
+      setAllFilesStatus(status);
+    } catch (err) {
+      console.error('Failed to load all files status:', err);
+    }
+  }, []);
+
+  const runAllFilesTextSearch = useCallback(async () => {
+    if (!checkAuth()) return;
+    
+    const parts = allFilesBulkInput
+      .split(/[\n,]/g)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2)
+      .slice(0, 50000); // Support up to 50K parts as requested
+    
+    if (parts.length === 0)
+      return setError("Enter at least one part number (min 2 characters)");
+    
+    setLoading(true);
+    setError(undefined);
+    setAllFilesBulkProgress({ completed: 0, total: parts.length, current: "Starting all-files search..." });
+    
+    try {
+      const result = await searchAllFilesText(parts, searchMode, 1, 100);
+      
+      // Transform results to BulkEntry format
+      const transformed: Record<string, BulkEntry> = {};
+      for (const [partNumber, partResult] of Object.entries(result.results)) {
+        transformed[partNumber] = {
+          companies: partResult.companies,
+          total_matches: partResult.total_matches,
+          part_number: partNumber,
+          message: partResult.total_matches > 0 ? 'Match found' : 'No matches',
+          latency_ms: result.latency_ms,
+          cached: result.cached || false,
+          search_mode: searchMode,
+          match_type: partResult.match_type || 'unknown',
+          search_engine: result.search_engine || 'elasticsearch_all_files'
+        } as BulkEntry;
+      }
+      
+      setAllFilesBulkResults(transformed);
+      setAllFilesBulkProgress(null);
+      
+      showToast(`✅ All-files search completed! Found results for ${result.total_parts} part numbers across ${result.synced_files_count || 0} files`, "success");
+    } catch (err: unknown) {
+      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (err as Error)?.message || "All-files search failed";
+      setError(errorMsg);
+      showToast(errorMsg, "error");
+      setAllFilesBulkProgress(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [allFilesBulkInput, searchMode, showToast, checkAuth]);
+
+  const runAllFilesExcelUpload = useCallback(async (f: File) => {
+    if (!checkAuth()) return;
+    
+    setAllFilesBulkUploading(true);
+    setError(undefined);
+    
+    try {
+      const result = await searchAllFilesExcel(f, searchMode, 1, 100);
+      
+      // Transform results to BulkEntry format
+      const transformed: Record<string, BulkEntry> = {};
+      for (const [partNumber, partResult] of Object.entries(result.results)) {
+        transformed[partNumber] = {
+          companies: partResult.companies,
+          total_matches: partResult.total_matches,
+          part_number: partNumber,
+          message: partResult.total_matches > 0 ? 'Match found' : 'No matches',
+          latency_ms: result.latency_ms,
+          cached: result.cached || false,
+          search_mode: searchMode,
+          match_type: partResult.match_type || 'unknown',
+          search_engine: result.search_engine || 'elasticsearch_all_files'
+        } as BulkEntry;
+      }
+      
+      setAllFilesBulkResults(transformed);
+      
+      showToast(`✅ All-files Excel search completed! Found results for ${result.total_parts} part numbers across ${result.synced_files_count || 0} files`, "success");
+    } catch (err: unknown) {
+      const errorMsg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || (err as Error)?.message || "All-files Excel search failed";
+      setError(errorMsg);
+      showToast(errorMsg, "error");
+    } finally {
+      setAllFilesBulkUploading(false);
+    }
+  }, [searchMode, showToast, checkAuth]);
+
+  // Load all files status when component mounts or when switching to all-files tab
+  useEffect(() => {
+    if (activeTab === 'all-files') {
+      loadAllFilesStatus();
+    }
+  }, [activeTab, loadAllFilesStatus]);
 
   function exportCompaniesToCSV(
     rows: Company[],
@@ -489,6 +599,13 @@ export default function QueryPage() {
             disabled={loading}
           >
             Part Number Search
+          </Button>
+          <Button
+            variant={activeTab === "all-files" ? "primary" : "secondary"}
+            onClick={() => setActiveTab("all-files")}
+            disabled={loading}
+          >
+            All Files Search
           </Button>
         </div>
       </div>
@@ -1089,6 +1206,346 @@ export default function QueryPage() {
                   pageSize={pageSize}
                 />
               )}
+            </>
+          ) : activeTab === "all-files" ? (
+            <>
+              {/* --- All Files Search UI --- */}
+              <Card className="shadow-lg border-0 bg-gradient-to-r from-green-50 to-emerald-50">
+                <CardHeader className="border-b border-gray-200 bg-white">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-gray-900">All Files Search</h2>
+                      <p className="text-sm text-gray-600 mt-1">Search across ALL synced files using Elasticsearch - up to 50K part numbers</p>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-6">
+                  <div className="space-y-4">
+                    {/* Files Status */}
+                    {allFilesStatus && (
+                      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-sm font-medium text-blue-900">Files Status</h3>
+                            <p className="text-sm text-blue-700">
+                              {allFilesStatus.synced_files} of {allFilesStatus.total_files} files synced to Elasticsearch
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-2xl font-bold text-blue-600">{allFilesStatus.synced_files}</div>
+                            <div className="text-xs text-blue-500">Synced Files</div>
+                          </div>
+                        </div>
+                        {allFilesStatus.synced_files === 0 && (
+                          <div className="mt-2 p-2 bg-yellow-100 border border-yellow-300 rounded text-sm text-yellow-800">
+                            ⚠️ No files are synced to Elasticsearch yet. Upload and process files first.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Search Mode and Page Size */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <label className="block text-sm font-medium text-gray-700">Search Mode</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                          value={searchMode}
+                          onChange={(e) => setSearchMode(e.target.value as 'exact' | 'fuzzy' | 'hybrid')}
+                          disabled={loading}
+                        >
+                          <option value="exact">Exact Match (Fastest)</option>
+                          <option value="fuzzy">Fuzzy Search</option>
+                          <option value="hybrid">Hybrid (Recommended - Fast)</option>
+                        </select>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="block text-sm font-medium text-gray-700">Page Size</label>
+                        <select
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                          value={pageSize}
+                          onChange={(e) => setPageSize(parseInt(e.target.value))}
+                          disabled={loading}
+                        >
+                          <option value={10}>10 results (Fastest)</option>
+                          <option value={20}>20 results</option>
+                          <option value={50}>50 results</option>
+                          <option value={100}>100 results (Recommended)</option>
+                          <option value={500}>500 results</option>
+                          <option value={1000}>1000 results</option>
+                        </select>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-gray-200 pt-6">
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
+                          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </div>
+                        <h3 className="text-lg font-semibold text-gray-900">Bulk Search Across All Files</h3>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Part Numbers (comma or newline separated)
+                          </label>
+                          <textarea
+                            className="w-full border border-gray-300 rounded-lg p-3 min-h-[120px] text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 resize-none"
+                            placeholder="Enter multiple part numbers separated by commas or new lines...&#10;Example:&#10;PN123, PN456, PN789&#10;or&#10;PN123&#10;PN456&#10;PN789"
+                            value={allFilesBulkInput}
+                            onChange={(e) => setAllFilesBulkInput(e.target.value)}
+                            disabled={loading}
+                          />
+                          <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                            <div className="flex items-start">
+                              <div className="flex-shrink-0">
+                                <svg className="h-5 w-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                              <div className="ml-3">
+                                <h3 className="text-sm font-medium text-green-800">
+                                  All Files Search
+                                </h3>
+                                <div className="mt-1 text-sm text-green-700">
+                                  <p>Search across ALL synced files simultaneously using Elasticsearch.</p>
+                                  <p className="mt-1"><strong>Performance:</strong> Supports up to 50K part numbers with Redis caching for speed.</p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          {allFilesBulkInput.split(/[\n,]/g).filter(s => s.trim().length >= 2).length > 1000 && (
+                            <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                              <div className="flex items-start gap-2">
+                                <svg className="w-5 h-5 text-yellow-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                                <div className="text-sm">
+                                  <p className="font-medium text-yellow-800">Large Dataset Detected</p>
+                                  <p className="text-yellow-700 mt-1">
+                                    {allFilesBulkInput.split(/[\n,]/g).filter(s => s.trim().length >= 2).length} parts detected. 
+                                    Results are limited to top matches per part for optimal performance.
+                                    Processing may take 30 seconds to 3 minutes for large datasets.
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-3">
+                          <Button 
+                            onClick={runAllFilesTextSearch} 
+                            disabled={loading || !allFilesStatus?.synced_files}
+                            className="bg-green-600 hover:bg-green-700 text-white font-medium px-6 py-2.5"
+                          >
+                            {loading ? <Spinner size={16} /> : "Search All Files"}
+                          </Button>
+                          <Button 
+                            variant="secondary" 
+                            onClick={() => allFilesFileInputRef.current?.click()}
+                            disabled={allFilesBulkUploading || !allFilesStatus?.synced_files}
+                            className="border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium px-6 py-2.5"
+                          >
+                            {allFilesBulkUploading ? <Spinner size={16} /> : '📁 Upload Excel File'}
+                          </Button>
+                          {allFilesBulkResults && Object.keys(allFilesBulkResults).length > 0 && (
+                            <Button 
+                              onClick={() => {
+                                const allCompanies = Object.values(allFilesBulkResults)
+                                  .filter(result => !('error' in result))
+                                  .flatMap(result => ('companies' in result ? result.companies : []));
+                                exportCompaniesToCSV(allCompanies, "all_files_search_export.csv");
+                              }}
+                              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5"
+                            >
+                              📊 Export All to CSV
+                            </Button>
+                          )}
+                          <input 
+                            ref={allFilesFileInputRef}
+                            type="file" 
+                            accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                            onChange={e => {
+                              const f = e.target.files?.[0]
+                              if (f) runAllFilesExcelUpload(f)
+                            }}
+                            disabled={allFilesBulkUploading || !allFilesStatus?.synced_files}
+                            className="hidden"
+                          />
+                        </div>
+                        
+                        {/* Progress Indicator */}
+                        {allFilesBulkProgress && (
+                          <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-medium text-green-900">
+                                Processing {allFilesBulkProgress.total.toLocaleString()} parts...
+                              </span>
+                              <span className="text-sm text-green-700">
+                                {allFilesBulkProgress.completed} / {allFilesBulkProgress.total}
+                              </span>
+                            </div>
+                            <div className="w-full bg-green-200 rounded-full h-2">
+                              <div 
+                                className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${(allFilesBulkProgress.completed / allFilesBulkProgress.total) * 100}%` }}
+                              />
+                            </div>
+                            <div className="mt-2 text-xs text-green-700">
+                              {allFilesBulkProgress.current}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* All Files Search Results */}
+              {allFilesBulkResults && Object.keys(allFilesBulkResults).length > 0 && (
+                <Card className="shadow-lg border-0">
+                  <CardHeader className="border-b border-gray-200 bg-gradient-to-r from-green-50 to-emerald-50">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h2 className="text-xl font-semibold text-gray-900">All Files Search Results</h2>
+                          <p className="text-sm text-gray-600 mt-1">
+                            {Object.keys(allFilesBulkResults).length.toLocaleString()} parts searched across all files • {Object.values(allFilesBulkResults).filter(r => !isErrorResult(r) && r.total_matches > 0).length.toLocaleString()} with results
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 self-start sm:self-auto">
+                        <Button 
+                          variant="secondary" 
+                          onClick={() => setAllFilesBulkResults(null)}
+                          className="text-sm border border-gray-300 text-gray-700 hover:bg-gray-50"
+                        >
+                          Clear Results
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-6">
+                    <div className="space-y-6">
+                      {Object.keys(allFilesBulkResults).map((pn) => {
+                        const entry = allFilesBulkResults[pn];
+                        const isError = isErrorResult(entry);
+                        const totalMatches = isError ? 0 : (entry.total_matches || 0);
+                        const searchModeVal = isError ? 'error' : (entry.search_mode || 'hybrid');
+                        const matchTypeVal = isError ? 'error' : (entry.match_type || 'n/a');
+                        const companies: Company[] = isError ? [] : (entry.companies || []);
+                        
+                        return (
+                          <div
+                            key={pn}
+                            className={`border rounded-lg transition-all duration-200 ${
+                              isError
+                                ? "bg-red-50 border-red-200"
+                                : "bg-white border-gray-200 shadow-sm"
+                            }`}
+                          >
+                            {/* Part Number Header */}
+                            <div className="p-4 border-b bg-gray-50">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <h3 className="text-lg font-semibold text-gray-900">{pn}</h3>
+                                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                    isError
+                                      ? "bg-red-100 text-red-800"
+                                      : totalMatches > 0
+                                      ? "bg-green-100 text-green-800"
+                                      : "bg-gray-100 text-gray-800"
+                                  }`}>
+                                    {isError ? "Error" : totalMatches > 0 ? `${totalMatches} matches` : "No matches"}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-500">
+                                  <span>Mode: {searchModeVal}</span>
+                                  <span>•</span>
+                                  <span>Type: {matchTypeVal}</span>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Results Content */}
+                            <div className="p-4">
+                              {isError ? (
+                                <div className="text-red-600 text-sm">
+                                  Error: {(entry as ErrorResult).error}
+                                </div>
+                              ) : totalMatches > 0 ? (
+                                <div className="space-y-3">
+                                  <div className="text-sm text-gray-600">
+                                    Found {totalMatches} companies with this part number across all files
+                                  </div>
+                                  <div className="grid gap-3">
+                                    {companies.slice(0, 5).map((company, idx) => (
+                                      <div key={idx} className="p-3 bg-gray-50 rounded-lg border">
+                                        <div className="flex justify-between items-start">
+                                          <div className="flex-1">
+                                            <div className="font-medium text-gray-900">{company.company_name}</div>
+                                            <div className="text-sm text-gray-600 mt-1">
+                                              {company.contact_details} • {company.email}
+                                            </div>
+                                            <div className="text-sm text-gray-500 mt-1">
+                                              Qty: {company.quantity} • Price: ${company.unit_price} • UQC: {company.uqc}
+                                            </div>
+                                            <div className="text-xs text-gray-400 mt-1">
+                                              File ID: {(company as Company & { file_id?: number }).file_id || 'Unknown'} • Confidence: {company.confidence || 0}%
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                    {companies.length > 5 && (
+                                      <div className="text-sm text-gray-500 text-center py-2">
+                                        ... and {companies.length - 5} more results
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() => {
+                                        if (!isError) {
+                                          setPartResults(entry as PartSearchResult);
+                                        }
+                                      }}
+                                      className="text-sm"
+                                    >
+                                      View All Results
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-gray-500 text-sm">
+                                  No matches found for this part number across all files
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
             </>
           ) : null}
         </div>
