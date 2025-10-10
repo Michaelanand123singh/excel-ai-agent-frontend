@@ -297,6 +297,114 @@ export default function UploadPage() {
     }
   }, [uploading])
 
+  // Update upload progress
+  const updateUploadProgress = useCallback((fileId: number, updates: Partial<UploadProgressData>) => {
+    setUploads(prev => {
+      const newUploads = new Map(prev)
+      const current = newUploads.get(fileId)
+      if (current) {
+        newUploads.set(fileId, { ...current, ...updates })
+      }
+      return newUploads
+    })
+  }, [])
+
+  // Connect to WebSocket for a file
+  const connectWebSocket = useCallback((fileId: number) => {
+    if (websockets.current.has(fileId)) {
+      return // Already connected
+    }
+
+    const socket = new WebSocket(wsUrl(`/api/v1/ws/${fileId}`))
+    
+    socket.onopen = () => {
+      console.log(`WebSocket connected for file ${fileId}`)
+    }
+    
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (!data || data.file_id !== fileId) return
+
+        // Map stages to progress for smoother UX
+        let progress = 0
+        switch (data.type) {
+          case 'processing_started':
+            progress = 5
+            break
+          case 'download_complete':
+            progress = 15
+            break
+          case 'data_processing_started':
+            progress = 20
+            break
+          case 'batch_progress':
+            // If backend does not send percentage, approximate from processed_rows
+            if (typeof data.percentage === 'number') {
+              progress = Math.min(90, 20 + Math.max(0, data.percentage) * 0.7)
+            } else if (typeof data.processed_rows === 'number' && typeof uploads.get(fileId)?.totalRows === 'number' && uploads.get(fileId)?.totalRows) {
+              const totalRows = uploads.get(fileId)!.totalRows!
+              progress = Math.min(90, 20 + (data.processed_rows / Math.max(1, totalRows)) * 70)
+            } else {
+              progress = 50
+            }
+            break
+          case 'postgresql_storage_complete':
+            progress = 90
+            break
+          case 'elasticsearch_sync_started':
+            progress = 95
+            break
+          case 'processing_complete':
+            progress = 100
+            break
+          default:
+            progress = uploads.get(fileId)?.progress ?? 0
+        }
+
+        updateUploadProgress(fileId, {
+          status: data.type === 'processing_complete' ? 'completed' : 'processing',
+          progress,
+          totalRows: data.total_rows ?? uploads.get(fileId)?.totalRows,
+          processedRows: data.processed_rows ?? uploads.get(fileId)?.processedRows,
+          details: {
+            elasticsearchSynced: data.elasticsearch_synced ?? uploads.get(fileId)?.details?.elasticsearchSynced,
+            googleCloudSearchSynced: data.google_cloud_search_synced ?? uploads.get(fileId)?.details?.googleCloudSearchSynced,
+            bulkSearchReady: data.bulk_search_ready ?? uploads.get(fileId)?.details?.bulkSearchReady,
+            processingStage: data.processing_stage ?? uploads.get(fileId)?.details?.processingStage
+          }
+        })
+
+        if (data.type === 'processing_complete') {
+          // Mark as completed
+          setActiveUploads(prev => prev.filter(id => id !== fileId))
+          setCompletedUploads(prev => [...prev, fileId])
+          
+          // Close websocket
+          socket.close()
+          websockets.current.delete(fileId)
+          
+          showToast(`File processing completed!`, 'success')
+        }
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error)
+      }
+    }
+    
+    socket.onerror = (error) => {
+      console.error(`WebSocket error for file ${fileId}:`, error)
+      socket.close()
+      websockets.current.delete(fileId)
+    }
+    
+    socket.onclose = () => {
+      console.log(`WebSocket closed for file ${fileId}`)
+      websockets.current.delete(fileId)
+    }
+    
+    websockets.current.set(fileId, socket)
+  }, [showToast, updateUploadProgress, uploads])
+
   // Upload management functions
   const startUploadWithTracking = useCallback(async (file: File) => {
     const abortController = new AbortController()
@@ -368,106 +476,50 @@ export default function UploadPage() {
     } finally {
       abortControllers.current.delete(tempFileId)
     }
-  }, [addFile, showToast])
-
-  // Connect to WebSocket for a file
-  const connectWebSocket = useCallback((fileId: number) => {
-    if (websockets.current.has(fileId)) {
-      return // Already connected
-    }
-
-    const socket = new WebSocket(wsUrl(`/api/v1/ws/${fileId}`))
-    
-    socket.onopen = () => {
-      console.log(`WebSocket connected for file ${fileId}`)
-    }
-    
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type && data.file_id === fileId) {
-          updateUploadProgress(fileId, {
-            status: data.type === 'processing_complete' ? 'completed' : 'processing',
-            progress: data.percentage || 100,
-            totalRows: data.total_rows,
-            processedRows: data.processed_rows,
-            details: {
-              elasticsearchSynced: data.elasticsearch_synced,
-              googleCloudSearchSynced: data.google_cloud_search_synced,
-              bulkSearchReady: data.bulk_search_ready,
-              processingStage: data.processing_stage
-            }
-          })
-
-          if (data.type === 'processing_complete') {
-            // Mark as completed
-            setActiveUploads(prev => prev.filter(id => id !== fileId))
-            setCompletedUploads(prev => [...prev, fileId])
-            
-            // Close websocket
-            socket.close()
-            websockets.current.delete(fileId)
-            
-            showToast(`File processing completed!`, 'success')
-          }
-        }
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error)
-      }
-    }
-    
-    socket.onerror = (error) => {
-      console.error(`WebSocket error for file ${fileId}:`, error)
-      socket.close()
-      websockets.current.delete(fileId)
-    }
-    
-    socket.onclose = () => {
-      console.log(`WebSocket closed for file ${fileId}`)
-      websockets.current.delete(fileId)
-    }
-    
-    websockets.current.set(fileId, socket)
-  }, [showToast])
-
-  // Update upload progress
-  const updateUploadProgress = useCallback((fileId: number, updates: Partial<UploadProgressData>) => {
-    setUploads(prev => {
-      const newUploads = new Map(prev)
-      const current = newUploads.get(fileId)
-      if (current) {
-        newUploads.set(fileId, { ...current, ...updates })
-      }
-      return newUploads
-    })
-  }, [])
+  }, [addFile, showToast, connectWebSocket])
 
   // Cancel an upload
-  const cancelUpload = useCallback((fileId: number) => {
-    const abortController = abortControllers.current.get(fileId)
-    if (abortController) {
-      abortController.abort()
-      abortControllers.current.delete(fileId)
-    }
-    
-    // Close WebSocket
-    const socket = websockets.current.get(fileId)
-    if (socket) {
-      socket.close()
-      websockets.current.delete(fileId)
-    }
-    
-    setUploads(prev => {
-      const newUploads = new Map(prev)
-      const current = newUploads.get(fileId)
-      if (current) {
-        newUploads.set(fileId, { ...current, status: 'cancelled' })
+  const cancelUpload = useCallback(async (fileId: number) => {
+    try {
+      // First, try to cancel on the server side
+      try {
+        await resetStuckFile(fileId)
+        console.log(`Server-side cancellation requested for file ${fileId}`)
+      } catch (error) {
+        console.warn(`Could not cancel file ${fileId} on server:`, error)
+        // Continue with client-side cancellation even if server call fails
       }
-      return newUploads
-    })
-    
-    setActiveUploads(prev => prev.filter(id => id !== fileId))
-    showToast('Upload cancelled', 'info')
+      
+      // Cancel client-side HTTP requests
+      const abortController = abortControllers.current.get(fileId)
+      if (abortController) {
+        abortController.abort()
+        abortControllers.current.delete(fileId)
+      }
+      
+      // Close WebSocket
+      const socket = websockets.current.get(fileId)
+      if (socket) {
+        socket.close()
+        websockets.current.delete(fileId)
+      }
+      
+      // Update UI state
+      setUploads(prev => {
+        const newUploads = new Map(prev)
+        const current = newUploads.get(fileId)
+        if (current) {
+          newUploads.set(fileId, { ...current, status: 'cancelled' })
+        }
+        return newUploads
+      })
+      
+      setActiveUploads(prev => prev.filter(id => id !== fileId))
+      showToast('Upload cancelled', 'info')
+    } catch (error) {
+      console.error('Error cancelling upload:', error)
+      showToast('Error cancelling upload', 'error')
+    }
   }, [showToast])
 
   // Remove an upload from the list
@@ -482,26 +534,101 @@ export default function UploadPage() {
     setFailedUploads(prev => prev.filter(id => id !== fileId))
   }, [])
 
+  // Clear all uploads and reset state
+  const clearAllUploads = useCallback(async () => {
+    try {
+      // Cancel all active uploads on server
+      for (const fileId of activeUploads) {
+        try {
+          await resetStuckFile(fileId)
+        } catch (error) {
+          console.warn(`Could not cancel file ${fileId} on server:`, error)
+        }
+      }
+      
+      // Clear all client-side state
+      abortControllers.current.forEach(controller => controller.abort())
+      abortControllers.current.clear()
+      
+      websockets.current.forEach(socket => socket.close())
+      websockets.current.clear()
+      
+      // Reset all state
+      setUploads(new Map())
+      setActiveUploads([])
+      setCompletedUploads([])
+      setFailedUploads([])
+      setFileId(undefined)
+      setProgress('ready for upload')
+      setError(undefined)
+      setRedirecting(false)
+      setConnecting(false)
+      setUploading(false)
+      
+      // Clear localStorage
+      try {
+        localStorage.removeItem('active_uploads')
+        localStorage.removeItem('upload_tracking_file_id')
+      } catch {
+        // Ignore localStorage errors
+      }
+      
+      showToast('All uploads cleared', 'success')
+    } catch (error) {
+      console.error('Error clearing uploads:', error)
+      showToast('Error clearing uploads', 'error')
+    }
+  }, [activeUploads, showToast])
+
   // Load persisted uploads from localStorage on mount
   useEffect(() => {
     try {
       const persisted = localStorage.getItem('active_uploads')
       if (persisted) {
         const data = JSON.parse(persisted)
+        
+        // Only restore completed/failed uploads, not active ones
+        // Active uploads should be cleared when user returns to page
         setUploads(new Map(data.uploads))
-        setActiveUploads(data.activeUploads || [])
         setCompletedUploads(data.completedUploads || [])
         setFailedUploads(data.failedUploads || [])
         
-        // Reconnect to websockets for active uploads
-        data.activeUploads?.forEach((fileId: number) => {
-          connectWebSocket(fileId)
-        })
+        // Clear active uploads to prevent ghost uploads
+        setActiveUploads([])
+        
+        // Don't reconnect to websockets for old uploads
+        // This prevents showing stale progress
       }
     } catch (error) {
       console.error('Failed to load persisted uploads:', error)
     }
-  }, [connectWebSocket])
+  }, [])
+
+  // Cleanup stale state when component mounts (user returns to page)
+  useEffect(() => {
+    // Clear any legacy tracking state
+    try {
+      localStorage.removeItem('upload_tracking_file_id')
+    } catch {
+      // Ignore localStorage errors
+    }
+    
+    // Reset legacy state
+    setFileId(undefined)
+    setProgress('ready for upload')
+    setError(undefined)
+    setRedirecting(false)
+    setConnecting(false)
+    setUploading(false)
+    
+    // Clear any stale WebSocket connections
+    websockets.current.forEach(socket => socket.close())
+    websockets.current.clear()
+    
+    // Clear any stale abort controllers
+    abortControllers.current.forEach(controller => controller.abort())
+    abortControllers.current.clear()
+  }, [])
 
   // Persist state to localStorage
   useEffect(() => {
@@ -519,14 +646,18 @@ export default function UploadPage() {
 
   // Cleanup on unmount
   useEffect(() => {
+    // Capture refs at the beginning of the effect
+    const currentAbortControllers = abortControllers.current
+    const currentWebsockets = websockets.current
+    
     return () => {
       // Abort all active uploads
-      abortControllers.current.forEach(controller => controller.abort())
-      abortControllers.current.clear()
+      currentAbortControllers.forEach(controller => controller.abort())
+      currentAbortControllers.clear()
       
       // Close all WebSockets
-      websockets.current.forEach(socket => socket.close())
-      websockets.current.clear()
+      currentWebsockets.forEach(socket => socket.close())
+      currentWebsockets.clear()
     }
   }, [])
 
@@ -635,7 +766,16 @@ export default function UploadPage() {
           {/* Enhanced Upload Progress Tracking */}
           {Array.from(uploads.values()).length > 0 && (
             <div className="mt-6 space-y-4">
-              <h3 className="text-lg font-medium text-gray-900">Upload Progress</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-medium text-gray-900">Upload Progress</h3>
+                <Button
+                  variant="outline"
+                  onClick={clearAllUploads}
+                  className="text-red-600 border-red-300 hover:bg-red-50 text-sm px-3 py-1"
+                >
+                  Clear All
+                </Button>
+              </div>
               
               {/* Active Uploads */}
               {activeUploads.length > 0 && (
