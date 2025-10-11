@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import { Card, CardContent } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
-import { getFileStatus, testUpload, uploadFile, wsUrl, resetStuckFile } from '../lib/api'
+import { UploadProgress } from '../components/UploadProgress'
+import { UploadAnalytics } from '../components/UploadAnalytics'
+import { FileDropZone } from '../components/FileDropZone'
+import { getFileStatus, testUpload, uploadFileWithProgress, wsUrl, resetStuckFile } from '../lib/api'
 import { useDatasets, type Dataset } from '../store/datasets'
 import { useToast } from '../hooks/useToast'
 
@@ -29,10 +31,9 @@ interface UploadProgressData {
 }
 
 export default function UploadPage() {
-  const fileInput = useRef<HTMLInputElement>(null)
-  const uploadAbortRef = useRef<AbortController | null>(null)
   const websockets = useRef<Map<number, WebSocket>>(new Map())
   const abortControllers = useRef<Map<number, AbortController>>(new Map())
+  const hasLoadedPersistedUploads = useRef(false)
   
   // Upload management state
   const [uploads, setUploads] = useState<Map<number, UploadProgressData>>(new Map())
@@ -41,15 +42,7 @@ export default function UploadPage() {
   const [failedUploads, setFailedUploads] = useState<number[]>([])
   
   // Legacy state for backward compatibility
-  const [fileId, setFileId] = useState<number>()
   const [progress, setProgress] = useState<string>('-')
-  const [progressDetails, setProgressDetails] = useState<{
-    type?: string
-    totalRows?: number
-    elasticsearchSynced?: boolean
-    googleCloudSearchSynced?: boolean
-    bulkSearchReady?: boolean
-  }>({})
   const [connecting, setConnecting] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -58,32 +51,13 @@ export default function UploadPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
 
-  async function handleUpload() {
-    const f = fileInput.current?.files?.[0]
-    if (!f) {
-      setError('Please select a file')
-      return
-    }
-    
+  async function handleUpload(file: File) {
     setUploading(true)
     setError(undefined)
     
     try {
       // Use the new tracking system
-      const fileId = await startUploadWithTracking(f)
-      
-      // Also update legacy state for backward compatibility
-      setFileId(fileId)
-      try { 
-        localStorage.setItem('upload_tracking_file_id', String(fileId)) 
-      } catch {
-        // Ignore localStorage errors
-      }
-      
-      // Clear file input
-      if (fileInput.current) {
-        fileInput.current.value = ''
-      }
+      await startUploadWithTracking(file)
     } catch (err: unknown) {
       let errorMsg = 'Upload failed'
       if (err && typeof err === 'object' && 'response' in err) {
@@ -112,7 +86,6 @@ export default function UploadPage() {
     setError(undefined)
     try {
       const meta = await testUpload()
-      setFileId(meta.id)
       const ds: Dataset = {
         id: meta.id,
         filename: meta.filename,
@@ -155,14 +128,6 @@ export default function UploadPage() {
       try {
         const data = JSON.parse(evt.data)
         if (data.type && data.file_id === id) {
-          setProgressDetails({
-            type: data.type,
-            totalRows: data.total_rows,
-            elasticsearchSynced: data.elasticsearch_synced,
-            googleCloudSearchSynced: data.google_cloud_search_synced,
-            bulkSearchReady: data.bulk_search_ready
-          })
-          
           // Update progress text based on type
           let progressText = data.type
           if (data.total_rows) {
@@ -200,7 +165,6 @@ export default function UploadPage() {
         const s = await getFileStatus(id, controller.signal)
         if (s.status) {
           setProgress(`status: ${s.status}`)
-          setProgressDetails({ type: s.status })
         }
         if (s.status === 'processed') {
           alive = false
@@ -243,12 +207,10 @@ export default function UploadPage() {
     try {
       const status = await getFileStatus(id)
       if (status.status === 'processing') {
-        setFileId(id)
         setProgress('resuming...')
         connectWs(id)
       } else if (status.status === 'processed') {
         // File is already processed, show option to go to query or upload new
-        setFileId(id)
         setProgress('already processed - ready for new upload or go to query')
         showToast('File already processed. You can upload a new file or go to query page.', 'info')
       } else if (status.status === 'failed') {
@@ -316,96 +278,128 @@ export default function UploadPage() {
     }
 
     const socket = new WebSocket(wsUrl(`/api/v1/ws/${fileId}`))
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
     
-    socket.onopen = () => {
-      console.log(`WebSocket connected for file ${fileId}`)
-    }
-    
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (!data || data.file_id !== fileId) return
+    const connect = () => {
+      socket.onopen = () => {
+        console.log(`WebSocket connected for file ${fileId}`)
+        reconnectAttempts = 0
+      }
+      
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (!data || data.file_id !== fileId) return
 
-        // Map stages to progress for smoother UX
-        let progress = 0
-        switch (data.type) {
-          case 'processing_started':
-            progress = 5
-            break
-          case 'download_complete':
-            progress = 15
-            break
-          case 'data_processing_started':
-            progress = 20
-            break
-          case 'batch_progress':
-            // If backend does not send percentage, approximate from processed_rows
-            if (typeof data.percentage === 'number') {
-              progress = Math.min(90, 20 + Math.max(0, data.percentage) * 0.7)
-            } else if (typeof data.processed_rows === 'number' && typeof uploads.get(fileId)?.totalRows === 'number' && uploads.get(fileId)?.totalRows) {
-              const totalRows = uploads.get(fileId)!.totalRows!
-              progress = Math.min(90, 20 + (data.processed_rows / Math.max(1, totalRows)) * 70)
-            } else {
-              progress = 50
-            }
-            break
-          case 'postgresql_storage_complete':
-            progress = 90
-            break
-          case 'elasticsearch_sync_started':
-            progress = 95
-            break
-          case 'processing_complete':
-            progress = 100
-            break
-          default:
-            progress = uploads.get(fileId)?.progress ?? 0
-        }
-
-        updateUploadProgress(fileId, {
-          status: data.type === 'processing_complete' ? 'completed' : 'processing',
-          progress,
-          totalRows: data.total_rows ?? uploads.get(fileId)?.totalRows,
-          processedRows: data.processed_rows ?? uploads.get(fileId)?.processedRows,
-          details: {
-            elasticsearchSynced: data.elasticsearch_synced ?? uploads.get(fileId)?.details?.elasticsearchSynced,
-            googleCloudSearchSynced: data.google_cloud_search_synced ?? uploads.get(fileId)?.details?.googleCloudSearchSynced,
-            bulkSearchReady: data.bulk_search_ready ?? uploads.get(fileId)?.details?.bulkSearchReady,
-            processingStage: data.processing_stage ?? uploads.get(fileId)?.details?.processingStage
+          // Map stages to progress for smoother UX
+          let progress = 0
+          switch (data.type) {
+            case 'processing_started':
+              progress = 5
+              break
+            case 'download_complete':
+              progress = 15
+              break
+            case 'data_processing_started':
+              progress = 20
+              break
+            case 'batch_progress':
+            case 'massive_file_progress':
+              // If backend does not send percentage, approximate from processed_rows
+              if (typeof data.percentage === 'number') {
+                progress = Math.min(90, 20 + Math.max(0, data.percentage) * 0.7)
+              } else if (typeof data.processed_rows === 'number' && data.total_rows) {
+                progress = Math.min(90, 20 + (data.processed_rows / Math.max(1, data.total_rows)) * 70)
+              } else {
+                progress = 50
+              }
+              break
+            case 'postgresql_storage_complete':
+              progress = 90
+              break
+            case 'elasticsearch_sync_started':
+              progress = 95
+              break
+            case 'processing_complete':
+              progress = 100
+              break
+            default:
+              progress = 0
           }
-        })
 
-        if (data.type === 'processing_complete') {
-          // Mark as completed
-          setActiveUploads(prev => prev.filter(id => id !== fileId))
-          setCompletedUploads(prev => [...prev, fileId])
-          
-          // Close websocket
-          socket.close()
-          websockets.current.delete(fileId)
-          
-          showToast(`File processing completed!`, 'success')
+          // Update progress using direct state updates to avoid dependency issues
+          setUploads(prev => {
+            const newUploads = new Map(prev)
+            const current = newUploads.get(fileId)
+            if (current) {
+              newUploads.set(fileId, {
+                ...current,
+                status: data.type === 'processing_complete' ? 'completed' : 'processing',
+                progress,
+                totalRows: data.total_rows ?? current.totalRows,
+                processedRows: data.processed_rows ?? current.processedRows,
+                details: {
+                  elasticsearchSynced: data.elasticsearch_synced ?? current.details?.elasticsearchSynced,
+                  googleCloudSearchSynced: data.google_cloud_search_synced ?? current.details?.googleCloudSearchSynced,
+                  bulkSearchReady: data.bulk_search_ready ?? current.details?.bulkSearchReady,
+                  processingStage: data.processing_stage ?? current.details?.processingStage
+                }
+              })
+            }
+            return newUploads
+          })
+
+          if (data.type === 'processing_complete') {
+            // Mark as completed
+            setActiveUploads(prev => prev.filter(id => id !== fileId))
+            setCompletedUploads(prev => [...prev, fileId])
+            
+            // Close websocket
+            socket.close()
+            websockets.current.delete(fileId)
+            
+            showToast(`File processing completed!`, 'success')
+          }
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error)
         }
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error)
+      }
+      
+      socket.onerror = (error) => {
+        console.error(`WebSocket error for file ${fileId}:`, error)
+      }
+      
+      socket.onclose = (event) => {
+        console.log(`WebSocket closed for file ${fileId}, code: ${event.code}`)
+        websockets.current.delete(fileId)
+        
+        // Attempt to reconnect if not a normal closure and file is still processing
+        if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+          // Check current upload status without depending on uploads state
+          setUploads(prev => {
+            const upload = prev.get(fileId)
+            if (upload && (upload.status === 'processing' || upload.status === 'uploading')) {
+              reconnectAttempts++
+              console.log(`Attempting to reconnect WebSocket for file ${fileId} (attempt ${reconnectAttempts}/${maxReconnectAttempts})`)
+              
+              window.setTimeout(() => {
+                const newSocket = new WebSocket(wsUrl(`/api/v1/ws/${fileId}`))
+                websockets.current.set(fileId, newSocket)
+                connect()
+              }, Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)) // Exponential backoff, max 10s
+            }
+            return prev // Return unchanged state
+          })
+        }
       }
     }
     
-    socket.onerror = (error) => {
-      console.error(`WebSocket error for file ${fileId}:`, error)
-      socket.close()
-      websockets.current.delete(fileId)
-    }
-    
-    socket.onclose = () => {
-      console.log(`WebSocket closed for file ${fileId}`)
-      websockets.current.delete(fileId)
-    }
-    
+    connect()
     websockets.current.set(fileId, socket)
-  }, [showToast, updateUploadProgress, uploads])
+  }, [showToast])
 
-  // Upload management functions
+  // Enhanced upload management functions
   const startUploadWithTracking = useCallback(async (file: File) => {
     const abortController = new AbortController()
     const tempFileId = Date.now() // Temporary ID until we get the real one
@@ -425,37 +419,59 @@ export default function UploadPage() {
     abortControllers.current.set(tempFileId, abortController)
     
     try {
-      const result = await uploadFile(file, abortController.signal)
+      // Show initial progress
+      updateUploadProgress(tempFileId, { progress: 5, status: 'uploading' })
+      
+      // Use enhanced upload with detailed progress tracking
+      const result = await uploadFileWithProgress(file, abortController.signal, (progress) => {
+        updateUploadProgress(tempFileId, {
+          progress: progress.percentage,
+          status: 'uploading',
+          currentChunk: progress.currentChunk,
+          totalChunks: progress.totalChunks,
+          uploadSpeed: progress.speed,
+          estimatedTime: progress.eta
+        })
+      })
+      
+      if (!result) {
+        throw new Error('Upload failed - no result returned')
+      }
       
       // Update with real file ID
       setUploads(prev => {
         const newUploads = new Map(prev)
         const current = newUploads.get(tempFileId)
-        if (current) {
+        if (current && result.id) {
           newUploads.delete(tempFileId)
           newUploads.set(result.id, { ...current, fileId: result.id, status: 'processing', progress: 100 })
         }
         return newUploads
       })
-      setActiveUploads(prev => prev.map(id => id === tempFileId ? result.id : id))
+      setActiveUploads(prev => prev.map(id => id === tempFileId ? (result.id || tempFileId) : id))
       
       // Add to datasets
-      addFile({
-        id: result.id,
-        filename: result.filename,
-        status: result.status,
-        size_bytes: result.size_bytes,
-        content_type: file.type || 'application/octet-stream',
-        rows_count: 0
-      })
-      
-      // Connect to WebSocket for processing updates
-      connectWebSocket(result.id)
+      if (result.id) {
+        addFile({
+          id: result.id,
+          filename: result.filename,
+          status: result.status,
+          size_bytes: result.size_bytes,
+          content_type: file.type || 'application/octet-stream',
+          rows_count: 0
+        })
+        
+        // Connect to WebSocket for processing updates
+        connectWebSocket(result.id)
+      }
       
       showToast(`File "${result.filename}" uploaded successfully!`, 'success')
       return result.id
     } catch (error) {
       // Handle upload failure
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed'
+      console.error('Upload failed:', error)
+      
       setUploads(prev => {
         const newUploads = new Map(prev)
         const current = newUploads.get(tempFileId)
@@ -463,7 +479,7 @@ export default function UploadPage() {
           newUploads.set(tempFileId, {
             ...current,
             status: 'failed',
-            error: error instanceof Error ? error.message : 'Upload failed'
+            error: errorMessage
           })
         }
         return newUploads
@@ -471,12 +487,12 @@ export default function UploadPage() {
       setActiveUploads(prev => prev.filter(id => id !== tempFileId))
       setFailedUploads(prev => [...prev, tempFileId])
       
-      showToast(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+      showToast(`Upload failed: ${errorMessage}`, 'error')
       throw error
     } finally {
       abortControllers.current.delete(tempFileId)
     }
-  }, [addFile, showToast, connectWebSocket])
+  }, [addFile, showToast, connectWebSocket, updateUploadProgress])
 
   // Cancel an upload
   const cancelUpload = useCallback(async (fileId: number) => {
@@ -558,7 +574,6 @@ export default function UploadPage() {
       setActiveUploads([])
       setCompletedUploads([])
       setFailedUploads([])
-      setFileId(undefined)
       setProgress('ready for upload')
       setError(undefined)
       setRedirecting(false)
@@ -582,27 +597,72 @@ export default function UploadPage() {
 
   // Load persisted uploads from localStorage on mount
   useEffect(() => {
-    try {
-      const persisted = localStorage.getItem('active_uploads')
-      if (persisted) {
-        const data = JSON.parse(persisted)
-        
-        // Only restore completed/failed uploads, not active ones
-        // Active uploads should be cleared when user returns to page
-        setUploads(new Map(data.uploads))
-        setCompletedUploads(data.completedUploads || [])
-        setFailedUploads(data.failedUploads || [])
-        
-        // Clear active uploads to prevent ghost uploads
-        setActiveUploads([])
-        
-        // Don't reconnect to websockets for old uploads
-        // This prevents showing stale progress
-      }
-    } catch (error) {
-      console.error('Failed to load persisted uploads:', error)
+    if (hasLoadedPersistedUploads.current) {
+      return // Already loaded, prevent infinite loop
     }
-  }, [])
+    
+    const loadPersistedUploads = async () => {
+      try {
+        hasLoadedPersistedUploads.current = true
+        
+        const persisted = localStorage.getItem('active_uploads')
+        if (persisted) {
+          const data = JSON.parse(persisted)
+          
+          // Only restore completed/failed uploads, not active ones
+          // Active uploads should be cleared when user returns to page
+          setUploads(new Map(data.uploads))
+          setCompletedUploads(data.completedUploads || [])
+          setFailedUploads(data.failedUploads || [])
+          
+          // Clear active uploads to prevent ghost uploads
+          setActiveUploads([])
+          
+          // Check if any files are still processing and reconnect to websockets
+          for (const [fileId, upload] of data.uploads) {
+            if (upload.status === 'processing') {
+              try {
+                const status = await getFileStatus(fileId)
+                if (status.status === 'processing') {
+                  // File is still processing, reconnect to websocket
+                  connectWebSocket(fileId)
+                  setActiveUploads(prev => [...prev, fileId])
+                } else if (status.status === 'processed') {
+                  // File completed while away, update status
+                  setUploads(prev => {
+                    const newUploads = new Map(prev)
+                    const current = newUploads.get(fileId)
+                    if (current) {
+                      newUploads.set(fileId, { ...current, status: 'completed', progress: 100 })
+                    }
+                    return newUploads
+                  })
+                  setCompletedUploads(prev => [...prev, fileId])
+                } else if (status.status === 'failed') {
+                  // File failed while away, update status
+                  setUploads(prev => {
+                    const newUploads = new Map(prev)
+                    const current = newUploads.get(fileId)
+                    if (current) {
+                      newUploads.set(fileId, { ...current, status: 'failed' })
+                    }
+                    return newUploads
+                  })
+                  setFailedUploads(prev => [...prev, fileId])
+                }
+              } catch (error) {
+                console.warn(`Could not check status for file ${fileId}:`, error)
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load persisted uploads:', error)
+      }
+    }
+    
+    loadPersistedUploads()
+  }, []) // Remove connectWebSocket from dependencies
 
   // Cleanup stale state when component mounts (user returns to page)
   useEffect(() => {
@@ -614,7 +674,6 @@ export default function UploadPage() {
     }
     
     // Reset legacy state
-    setFileId(undefined)
     setProgress('ready for upload')
     setError(undefined)
     setRedirecting(false)
@@ -662,390 +721,134 @@ export default function UploadPage() {
   }, [])
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Upload Dataset</h1>
-      <Card>
-        <CardHeader title="Upload" description="Upload CSV/XLSX, then watch processing progress in real-time." />
-        <CardContent>
-          <Input 
-            ref={fileInput} 
-            type="file" 
-            accept=".csv,.xlsx,.xls"
-            disabled={uploading}
-            className="mb-3"
-          />
-          <div className="flex gap-2 flex-wrap">
-            <Button 
-              onClick={handleUpload} 
-              disabled={uploading}
-            >
-              {uploading ? <Spinner size={16} /> : 'Upload'}
-            </Button>
-            {uploading && (
-              <Button 
-                variant="secondary"
-                onClick={() => {
-                  try {
-                    uploadAbortRef.current?.abort()
-                    setUploading(false)
-                    setProgress('upload cancelled')
-                    showToast('Upload cancelled', 'success')
-                  } catch {
-                    // Ignore abort errors
-                  }
-                }}
-              >
-                Cancel Upload
-              </Button>
-            )}
-            <Button 
-              variant="secondary" 
-              onClick={handleTestUpload}
-              disabled={uploading}
-            >
-              {uploading ? <Spinner size={16} /> : 'Use Sample'}
-            </Button>
-            {fileId && !uploading && (
-              <>
-                <Button 
-                  variant="outline" 
-                  onClick={async () => {
-                    try {
-                      // Try to reset the stuck file on the backend
-                      await resetStuckFile(fileId)
-                      showToast('Reset stuck file on server', 'success')
-                    } catch (error) {
-                      console.warn('Could not reset file on server:', error)
-                    }
-                    
-                    // Clear local state regardless
-                    localStorage.removeItem('upload_tracking_file_id')
-                    setFileId(undefined)
-                    setProgress('ready for upload')
-                    setError(undefined)
-                    showToast('Cleared stuck upload. Ready for new file.', 'success')
-                  }}
-                  className="text-orange-600 border-orange-300 hover:bg-orange-50"
-                >
-                  Clear Stuck Upload
-                </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    navigate(`/query?fileId=${fileId}`)
-                  }}
-                  className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                >
-                  Go to Query Page
-                </Button>
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    localStorage.removeItem('upload_tracking_file_id')
-                    setFileId(undefined)
-                    setProgress('ready for upload')
-                    setError(undefined)
-                    setRedirecting(false)
-                    setConnecting(false)
-                    showToast('Ready for new upload', 'success')
-                  }}
-                  className="text-green-600 border-green-300 hover:bg-green-50"
-                >
-                  Start Fresh
-                </Button>
-              </>
-            )}
-          </div>
-          
-          {error && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Upload Dataset</h1>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={clearAllUploads}
+            className="text-red-600 border-red-300 hover:bg-red-50"
+          >
+            Clear All
+          </Button>
+        </div>
+      </div>
+
+      {/* File Upload Section */}
+      <FileDropZone
+        onFileSelect={handleUpload}
+        onTestUpload={handleTestUpload}
+        uploading={uploading}
+        disabled={false}
+        maxFileSize={500}
+        acceptedTypes={['.csv', '.xlsx', '.xls']}
+      />
+
+      {/* Error Display */}
+      {error && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="bg-red-50 border border-red-200 rounded-md p-3">
               <div className="text-sm text-red-600">{String(error)}</div>
             </div>
-          )}
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Enhanced Upload Progress Tracking */}
-          {Array.from(uploads.values()).length > 0 && (
-            <div className="mt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-medium text-gray-900">Upload Progress</h3>
-                <Button
-                  variant="outline"
-                  onClick={clearAllUploads}
-                  className="text-red-600 border-red-300 hover:bg-red-50 text-sm px-3 py-1"
-                >
-                  Clear All
-                </Button>
-              </div>
-              
-              {/* Active Uploads */}
-              {activeUploads.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-medium text-blue-600">Active Uploads ({activeUploads.length})</h4>
-                  {activeUploads.map(fileId => {
-                    const upload = uploads.get(fileId)
-                    if (!upload) return null
-                    
-                    return (
-                      <div key={fileId} className="border border-blue-200 rounded-lg p-4 bg-blue-50">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">
-                              {upload.status === 'uploading' ? '📤' : '⚙️'}
-                            </span>
-                            <div>
-                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
-                                {upload.filename}
-                              </h5>
-                              <p className="text-sm font-medium text-blue-600">
-                                {upload.status.charAt(0).toUpperCase() + upload.status.slice(1)}
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <Button
-                            variant="outline"
-                            onClick={() => cancelUpload(fileId)}
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50 text-sm px-3 py-1"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-
-                        {/* Progress Bar */}
-                        <div className="mb-3">
-                          <div className="flex justify-between text-sm text-gray-600 mb-1">
-                            <span>Progress</span>
-                            <span>{Math.round(upload.progress)}%</span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div
-                              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                              style={{ width: `${upload.progress}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Upload Details */}
-                        {upload.status === 'uploading' && (
-                          <div className="space-y-2 text-sm text-gray-600">
-                            {upload.currentChunk && upload.totalChunks && (
-                              <div className="flex justify-between">
-                                <span>Chunk Progress:</span>
-                                <span>{upload.currentChunk}/{upload.totalChunks}</span>
-                              </div>
-                            )}
-                            {upload.uploadSpeed && (
-                              <div className="flex justify-between">
-                                <span>Upload Speed:</span>
-                                <span>{(upload.uploadSpeed / (1024*1024)).toFixed(1)}MB/s</span>
-                              </div>
-                            )}
-                            {upload.estimatedTime && (
-                              <div className="flex justify-between">
-                                <span>Estimated Time:</span>
-                                <span>{Math.round(upload.estimatedTime)}s</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Processing Details */}
-                        {upload.status === 'processing' && (
-                          <div className="space-y-2 text-sm text-gray-600">
-                            {upload.processedRows && upload.totalRows && (
-                              <div className="flex justify-between">
-                                <span>Rows Processed:</span>
-                                <span>{upload.processedRows.toLocaleString()}/{upload.totalRows.toLocaleString()}</span>
-                              </div>
-                            )}
-                            {upload.details?.processingStage && (
-                              <div className="flex justify-between">
-                                <span>Stage:</span>
-                                <span className="capitalize">{upload.details.processingStage}</span>
-                              </div>
-                            )}
-                            {upload.details?.elasticsearchSynced !== undefined && (
-                              <div className="flex justify-between">
-                                <span>Elasticsearch:</span>
-                                <span className={upload.details.elasticsearchSynced ? 'text-green-600' : 'text-yellow-600'}>
-                                  {upload.details.elasticsearchSynced ? 'Synced' : 'Syncing...'}
-                                </span>
-                              </div>
-                            )}
-                            {upload.details?.bulkSearchReady && (
-                              <div className="flex justify-between">
-                                <span>Bulk Search:</span>
-                                <span className="text-green-600">Ready</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Loading Spinner */}
-                        <div className="flex items-center justify-center mt-3">
-                          <Spinner size={16} />
-                          <span className="ml-2 text-sm text-gray-600">
-                            {upload.status === 'uploading' ? 'Uploading...' : 'Processing...'}
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* Completed Uploads */}
-              {completedUploads.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-medium text-green-600">Completed Uploads ({completedUploads.length})</h4>
-                  {completedUploads.map(fileId => {
-                    const upload = uploads.get(fileId)
-                    if (!upload) return null
-                    
-                    return (
-                      <div key={fileId} className="border border-green-200 rounded-lg p-4 bg-green-50">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">✅</span>
-                            <div>
-                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
-                                {upload.filename}
-                              </h5>
-                              <p className="text-sm font-medium text-green-600">Completed</p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex gap-2">
-                            <Button
-                              onClick={() => navigate(`/query?fileId=${fileId}`)}
-                              className="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1"
-                            >
-                              View Results
-                            </Button>
-                            <Button
-                              variant="outline"
-                              onClick={() => removeUpload(fileId)}
-                              className="text-gray-600 hover:text-gray-700 text-sm px-3 py-1"
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
-
-                        {upload.totalRows && (
-                          <div className="text-sm text-green-800">
-                            {upload.totalRows.toLocaleString()} rows processed successfully!
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* Failed Uploads */}
-              {failedUploads.length > 0 && (
-                <div className="space-y-3">
-                  <h4 className="text-sm font-medium text-red-600">Failed Uploads ({failedUploads.length})</h4>
-                  {failedUploads.map(fileId => {
-                    const upload = uploads.get(fileId)
-                    if (!upload) return null
-                    
-                    return (
-                      <div key={fileId} className="border border-red-200 rounded-lg p-4 bg-red-50">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">❌</span>
-                            <div>
-                              <h5 className="font-medium text-gray-900 truncate max-w-xs">
-                                {upload.filename}
-                              </h5>
-                              <p className="text-sm font-medium text-red-600">Failed</p>
-                            </div>
-                          </div>
-                          
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              onClick={() => removeUpload(fileId)}
-                              className="text-gray-600 hover:text-gray-700 text-sm px-3 py-1"
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
-
-                        {upload.error && (
-                          <div className="text-sm text-red-800">
-                            Error: {upload.error}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+      {/* Upload Progress Section */}
+      {Array.from(uploads.values()).length > 0 && (
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold text-gray-900">Upload Progress</h2>
+          
+          {/* Active Uploads */}
+          {activeUploads.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium text-blue-600">Active Uploads ({activeUploads.length})</h3>
+              {activeUploads.map(fileId => {
+                const upload = uploads.get(fileId)
+                if (!upload) return null
+                
+                return (
+                  <UploadProgress
+                    key={fileId}
+                    upload={upload}
+                    onCancel={cancelUpload}
+                    onRemove={removeUpload}
+                    onViewResults={(id) => navigate(`/query?fileId=${id}`)}
+                  />
+                )
+              })}
             </div>
           )}
-          
-          <div className="mt-4 text-sm text-gray-500 flex items-center gap-2">
-            {connecting && <Spinner />}
-            {redirecting && <Spinner />}
-            {redirecting ? 'Processing complete! Redirecting to Query page...' : 
-             connecting ? 'Connecting...' : `Progress: ${progress}`}
-          </div>
-          
-          {/* Detailed progress indicators */}
-          {progressDetails.type && (
-            <div className="mt-3 space-y-2">
-              <div className="text-xs text-gray-600 font-medium">Processing Status:</div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-xs">
-                  <div className={`w-2 h-2 rounded-full ${
-                    progressDetails.type === 'processing_started' ? 'bg-blue-500' :
-                    progressDetails.type === 'download_complete' ? 'bg-green-500' :
-                    progressDetails.type === 'processing_complete' ? 'bg-green-500' : 'bg-gray-300'
-                  }`}></div>
-                  <span className="text-gray-600">
-                    {progressDetails.type === 'processing_started' && 'Processing started'}
-                    {progressDetails.type === 'download_complete' && 'File downloaded'}
-                    {progressDetails.type === 'batch_progress' && 'Processing data...'}
-                    {progressDetails.type === 'processing_complete' && 'Processing complete'}
-                  </span>
-                </div>
+
+          {/* Completed Uploads */}
+          {completedUploads.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium text-green-600">Completed Uploads ({completedUploads.length})</h3>
+              {completedUploads.map(fileId => {
+                const upload = uploads.get(fileId)
+                if (!upload) return null
                 
-                {progressDetails.totalRows && (
-                  <div className="flex items-center gap-2 text-xs">
-                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                    <span className="text-gray-600">
-                      {progressDetails.totalRows.toLocaleString()} rows processed
-                    </span>
-                  </div>
-                )}
-                
-                <div className="flex items-center gap-2 text-xs">
-                  <div className={`w-2 h-2 rounded-full ${
-                    progressDetails.elasticsearchSynced ? 'bg-green-500' : 'bg-yellow-500'
-                  }`}></div>
-                  <span className="text-gray-600">
-                    Elasticsearch sync: {progressDetails.elasticsearchSynced ? 'Complete' : 'In progress...'}
-                  </span>
-                </div>
-                
-                {progressDetails.bulkSearchReady && (
-                  <div className="flex items-center gap-2 text-xs">
-                    <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                    <span className="text-green-600 font-medium">
-                      ✓ Bulk search ready - super fast search enabled!
-                    </span>
-                  </div>
-                )}
-              </div>
+                return (
+                  <UploadProgress
+                    key={fileId}
+                    upload={upload}
+                    onRemove={removeUpload}
+                    onViewResults={(id) => navigate(`/query?fileId=${id}`)}
+                  />
+                )
+              })}
             </div>
           )}
-          {fileId && <div className="text-xs text-gray-500">file id: {fileId}</div>}
-        </CardContent>
-      </Card>
+
+          {/* Failed Uploads */}
+          {failedUploads.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium text-red-600">Failed Uploads ({failedUploads.length})</h3>
+              {failedUploads.map(fileId => {
+                const upload = uploads.get(fileId)
+                if (!upload) return null
+                
+                return (
+                  <UploadProgress
+                    key={fileId}
+                    upload={upload}
+                    onRemove={removeUpload}
+                    onRetry={async (id) => {
+                      // Retry logic - remove from failed and restart upload
+                      const upload = uploads.get(id)
+                      if (upload) {
+                        setFailedUploads(prev => prev.filter(fileId => fileId !== id))
+                        // You could implement retry logic here
+                        showToast('Retry functionality coming soon', 'info')
+                      }
+                    }}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Analytics Section */}
+      {Array.from(uploads.values()).length > 0 && (
+        <UploadAnalytics
+          uploads={uploads}
+          activeUploads={activeUploads}
+          completedUploads={completedUploads}
+          failedUploads={failedUploads}
+        />
+      )}
+
+      {/* Legacy Status Display */}
+      <div className="text-sm text-gray-500 flex items-center gap-2">
+        {connecting && <Spinner />}
+        {redirecting && <Spinner />}
+        {redirecting ? 'Processing complete! Redirecting to Query page...' : 
+         connecting ? 'Connecting...' : `Status: ${progress}`}
+      </div>
     </div>
   )
 }

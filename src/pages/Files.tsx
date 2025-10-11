@@ -22,12 +22,7 @@ import {
   ArrowPathIcon
 } from '@heroicons/react/24/outline'
 
-// WebSocket URL helper
-const wsUrl = (path: string) => {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  return `${protocol}//${host}${path}`
-}
+import { wsUrl } from '../lib/api'
 
 export default function FilesPage() {
   const { files, isLoading, error, loadFiles, removeFile } = useDatasets()
